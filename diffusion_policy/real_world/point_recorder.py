@@ -77,7 +77,7 @@ class PointCloudRecorder:
         self.points_dataset = self.zarr_root.create_dataset(
             'points',
             shape=(0, 6),  # (N_points, 6)
-            chunks=(10000, 6),
+            chunks=(30000, 6),
             dtype=np.float32,
             compressor=compressor,
             fill_value=0.0
@@ -120,23 +120,10 @@ class PointCloudRecorder:
         valid_mask = np.isfinite(pointcloud).all(axis=1)
         valid_pointcloud = pointcloud[valid_mask].astype(np.float32)
         
-        if len(valid_pointcloud) == 0:
-            self.logger.warning("Empty pointcloud after filtering")
-            return
         
-        # 기존 함수 사용 - 드롭 프레임 보상 포함
-        if self.start_time is not None:
-            local_idxs, global_idxs, self.next_global_idx = get_accumulate_timestamp_idxs(
-                timestamps=[frame_time],
-                start_time=self.start_time,
-                dt=self.dt,
-                next_global_idx=self.next_global_idx
-            )
-            # 드롭 프레임 보상 - 같은 포인트클라우드를 여러 번 저장
-            with self.lock:
-                for local_idx, global_idx in zip(local_idxs, global_idxs):
-                    self._write_pointcloud_to_zarr(valid_pointcloud, frame_time)
-                    self.frame_count += 1
+        with self.lock:
+            self._write_pointcloud_to_zarr(valid_pointcloud, frame_time)
+            self.frame_count += 1
 
     def _write_pointcloud_to_zarr(self, pointcloud: np.ndarray, timestamp: float):
         """실제 Zarr에 포인트클라우드 저장"""

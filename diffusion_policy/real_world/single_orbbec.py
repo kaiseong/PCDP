@@ -11,6 +11,16 @@ import open3d as o3d
 from threadpoolctl import threadpool_limits
 from multiprocessing.managers import SharedMemoryManager
 
+# debug
+import csv
+def save_timestamp_duration_to_csv(timestamps, filename):
+    """타임스탬프 배열을 CSV 파일로 저장"""
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['index', 'timestamp'])
+        for i, ts in enumerate(timestamps):
+            writer.writerow([i, ts])
+
 
 import pyorbbecsdk as ob
 
@@ -121,16 +131,10 @@ class SingleOrbbec(mp.Process):
                 thread_count=1)
         
         if point_recorder is None:
-<<<<<<< HEAD
-            point_recorder = PointCloudRecorder(
-                fps=capture_fps,
-                compression_level=0
-=======
             point_recorder = AsyncPointCloudRecorder(
                 fps=capture_fps,
                 compression_level=1,
                 queue_size=60
->>>>>>> 6bb138fe8 (second)
             )
 
         # copied variables
@@ -314,19 +318,13 @@ class SingleOrbbec(mp.Process):
             # debuging
             pre_depth_time= 0
             delay_cnt=0
-<<<<<<< HEAD
-=======
             no_cnt=0
->>>>>>> 6bb138fe8 (second)
             normal_cnt=0
             checking=False
             
             normal_duration = np.array([], dtype=np.float32)
             record_duration = np.array([], dtype=np.float32)
-<<<<<<< HEAD
-=======
             timestamp_duration = np.array([],dtype=np.float32)
->>>>>>> 6bb138fe8 (second)
             record_end = 0
             while not self.stop_event.is_set():
                 frames = pipeline.wait_for_frames(35)
@@ -347,20 +345,12 @@ class SingleOrbbec(mp.Process):
                 if checking and self.verbose:
                     if (depth.get_timestamp() - pre_depth_time) > 35:
                         delay_cnt += 1
-<<<<<<< HEAD
-                    normal_cnt += 1
-                    pre_depth_time = depth.get_timestamp()
-                    print(f"delay_cnt: {delay_cnt}, normal_cnt: {normal_cnt}, ")
-                    record_duration=np.append(record_duration, (record_start-record_end)/1e6)
-=======
                     if (depth.get_timestamp() == pre_depth_time):
                         no_cnt += 1
                     normal_cnt += 1
                     pre_depth_time = depth.get_timestamp()
-                    # print(f"delay_cnt: {delay_cnt}, normal_cnt: {normal_cnt}, no_cnt: {no_cnt}")
                     record_duration=np.append(record_duration, (record_start-record_end)/1e6)
                     timestamp_duration= np.append(timestamp_duration, receive_time)
->>>>>>> 6bb138fe8 (second)
                 #######################################
                 record_end =record_start
 
@@ -386,10 +376,7 @@ class SingleOrbbec(mp.Process):
                 put_data = data
                 
                 if self.put_downsample:
-<<<<<<< HEAD
-=======
                     
->>>>>>> 6bb138fe8 (second)
                     local_idxs, global_idxs, put_idx = get_accumulate_timestamp_idxs(
                         timestamps=[receive_time],
                         start_time=put_start_time,
@@ -424,10 +411,7 @@ class SingleOrbbec(mp.Process):
                 # data['pointcloud'] = data['pointcloud'][::int(5 / 0.01) or 1]  # Downsample by 1 cm voxel size
                 
                 # here
-<<<<<<< HEAD
-=======
                 # print(f"[single_orbbec] receive_tie: {receive_time}!")
->>>>>>> 6bb138fe8 (second)
                 
                 if self.video_recorder.is_ready():
                     self.video_recorder.write_frame(color_bgr, frame_time=receive_time)
@@ -466,10 +450,7 @@ class SingleOrbbec(mp.Process):
                         # self.video_recorder.stop()
                         self.point_recorder.stop()
                         checking=False
-<<<<<<< HEAD
-=======
                         print(f"delay_cnt: {delay_cnt}, normal_cnt: {normal_cnt}, no_cnt: {no_cnt}")
->>>>>>> 6bb138fe8 (second)
                         print("normal_duration")
                         print(f"    mean: {normal_duration.mean()}ms\n"
                               f"    max: {normal_duration.max()}ms\n"
@@ -480,13 +461,14 @@ class SingleOrbbec(mp.Process):
                               f"    max: {record_duration.max()}ms\n"
                               f"    min: {record_duration.min()}ms\n"
                               f"    std: {record_duration.std()}ms")
-<<<<<<< HEAD
-=======
                         print(f"recorder_frame_count: {self.point_recorder.frame_count}")
                         for i in range(10):
                             print(f"{i} record_timestamp: {timestamp_duration[i]}")
                         print(f"last record time: {timestamp_duration[-1]}")
->>>>>>> 6bb138fe8 (second)
+                        # debug
+                        timestamp=time.time()
+                        csv_filename = f"timestamp_duration_{timestamp}.csv"
+                        save_timestamp_duration_to_csv(timestamp_duration, csv_filename)
                     elif cmd == Command.RESTART_PUT.value:
                         put_idx = None
                         put_start_time = command['put_start_time']

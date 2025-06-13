@@ -103,11 +103,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
                 # pump obs
                 obs = env.get_obs()
-<<<<<<< HEAD
-
-=======
                 # print(f"[demo_real_piper] time.time: {time.time()}")
->>>>>>> 6bb138fe8 (second)
                 # handle key presses
                 press_events = key_counter.get_press_events()
                 for key_stroke in press_events:
@@ -135,10 +131,6 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                         # delete
                 stage = key_counter[Key.space]
 
-<<<<<<< HEAD
-                """
-=======
->>>>>>> 6bb138fe8 (second)
                 # visualize
                 # if is_recording:
                     # print("recoding!")
@@ -170,10 +162,6 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 vis.poll_events()
                 vis.update_renderer()
                 pre_time = now
-<<<<<<< HEAD
-                """
-=======
->>>>>>> 6bb138fe8 (second)
 
 
                 precise_wait(t_sample)

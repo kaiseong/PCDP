@@ -12,6 +12,7 @@ class AsyncPointCloudRecorder:
         self.writer_thread = None
         self.stop_flag = threading.Event()
         self.recording = False
+        self.last_timestamp = None
         
     def start(self, file_path, start_time=None):
         """녹화 시작"""
@@ -27,7 +28,10 @@ class AsyncPointCloudRecorder:
         """메인 스레드: 큐에 넣고 즉시 리턴 (논블로킹)"""
         if not self.recording:
             return
-            
+        
+        if frame_time is not None and frame_time == self.last_timestamp:
+            return
+        
         try:
             # 큐가 가득 차면 오래된 프레임 버리기
             if self.write_queue.full():
@@ -38,6 +42,7 @@ class AsyncPointCloudRecorder:
             
             # 새 프레임 추가 (복사본 사용)
             self.write_queue.put_nowait((pointcloud.copy(), frame_time))
+            self.last_timestamp = frame_time
             
         except:
             pass  # 큐 오류 시 프레임 스킵

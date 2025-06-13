@@ -88,8 +88,8 @@ class RealEnv:
 
         orbbec_point_recorder = AsyncPointCloudRecorder(
             fps=recording_fps,
-            compression_level=3,
-            queue_size=60
+            compression_level=2,
+            queue_size=120
         )
         
         orbbec = SingleOrbbec(
