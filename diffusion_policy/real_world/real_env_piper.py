@@ -87,7 +87,6 @@ class RealEnv:
             thread_count=thread_per_video)
 
         orbbec_point_recorder = AsyncPointCloudRecorder(
-            fps=recording_fps,
             compression_level=2,
             queue_size=120
         )
@@ -95,9 +94,8 @@ class RealEnv:
         orbbec = SingleOrbbec(
             shm_manager=shm_manager,
             rgb_resolution = (1280, 720),
-            capture_fps = capture_fps,
             put_fps = capture_fps,
-            record_fps = recording_fps,
+            video_record_fps = recording_fps,
             get_max_k = max_obs_buffer_size,
             mode=orbbec_mode,
             recording_transform = None,
@@ -241,16 +239,6 @@ class RealEnv:
         for k, v in robot_obs_raw.items():
             robot_obs[k] = v[this_idxs]
         
-        # print("robot_obs_raw")
-        # for key in robot_obs_raw.keys():
-        #     print(f"    {key}: {robot_obs_raw[key].shape}")
-        # print(f"    robot_timestamps: {robot_timestamps.shape}")
-        # robot_times = np.asarray(robot_timestamps, dtype=np.float64)
-        # if self.start_time is not None:
-        #     print(robot_times - self.start_time)
-        # print("robot_obs")
-        # for key in robot_obs.keys():
-        #     print(f"    {key}: {robot_obs[key].shape}")
 
         # accumulate obs
         if self.obs_accumulator is not None:
@@ -259,14 +247,6 @@ class RealEnv:
                 robot_timestamps
             )
         
-            
-
-            # print("orbbec_obs")
-            # for key in orbbec_obs.keys():
-            #     print(f"    {key}: {orbbec_obs[key].shape}")
-            # print("last_orbbec_data")
-            # for key in self.last_orbbec_data.keys():
-            #     print(f"    {key}: {self.last_orbbec_data[key].shape}")
 
         # return obs
         obs_data = dict(orbbec_obs)
@@ -378,19 +358,12 @@ class RealEnv:
             # We don't need to worry new data come in here.
             obs_data = self.obs_accumulator.data
             obs_timestamps = self.obs_accumulator.timestamps
-            print(f"robot timestamp")
-            for i in range(5):
-                print(f"    {i} timestamp: {obs_timestamps[i]}")
-            print(f"    last timestamp: {obs_timestamps[-1]}")
-            # print(f"Obs data keys: {obs_data.keys()}")
+            
 
             actions = self.action_accumulator.actions
             action_timestamps = self.action_accumulator.timestamps
             stages = self.stage_accumulator.actions
-            print(f"obs_timestamps: {obs_timestamps.shape}, "
-                  f"action_timestamps: {action_timestamps.shape}, ")
             n_steps = min(len(obs_timestamps), len(action_timestamps))
-            print(f"n_steps: {n_steps}, ")
             if n_steps > 0:
                 episode = dict()
                 episode['timestamp'] = obs_timestamps[:n_steps]

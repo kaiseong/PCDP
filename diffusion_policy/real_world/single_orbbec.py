@@ -49,10 +49,9 @@ class SingleOrbbec(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         rgb_resolution=(1280, 720),
-        capture_fps=30,
         put_fps=None,
         put_downsample=True,
-        record_fps=None,
+        video_record_fps=30,
         get_max_k=30,
         mode="C2D",
         recording_transform: Optional[Callable[[Dict], Dict]] = None,
@@ -64,9 +63,7 @@ class SingleOrbbec(mp.Process):
         
         
         if put_fps is None:
-            put_fps = capture_fps
-        if record_fps is None:
-            record_fps = capture_fps
+            put_fps = video_record_fps
 
         # create ring buffer
         resolution = tuple(rgb_resolution)
@@ -123,7 +120,7 @@ class SingleOrbbec(mp.Process):
         # create video recorder
         if video_recorder is None:
             video_recorder = VideoRecorder.create_h264(
-                fps=record_fps,
+                fps=video_record_fps,
                 codec='h264',
                 input_pix_fmt='bgr24',
                 crf=18,
@@ -132,17 +129,14 @@ class SingleOrbbec(mp.Process):
         
         if point_recorder is None:
             point_recorder = AsyncPointCloudRecorder(
-                fps=capture_fps,
                 compression_level=1,
                 queue_size=60
             )
 
         # copied variables
         self.resolution = resolution
-        self.capture_fps = capture_fps
         self.put_fps = put_fps
         self.put_downsample = put_downsample
-        self.record_fps = record_fps
         self.mode = mode
         self.recording_transform = recording_transform
         self.video_recorder = video_recorder
@@ -270,7 +264,7 @@ class SingleOrbbec(mp.Process):
             align_to = ob.OBStreamType.DEPTH_STREAM
         
         w, h = self.resolution
-        fps = self.capture_fps
+        fps = 30
 
         depth_profile = pipeline.get_stream_profile_list(ob.OBSensorType.DEPTH_SENSOR)\
                         .get_video_stream_profile(*depth_res,ob.OBFormat.Y16,fps)
@@ -316,16 +310,18 @@ class SingleOrbbec(mp.Process):
             
 
             # debuging
-            pre_depth_time= 0
-            delay_cnt=0
-            no_cnt=0
-            normal_cnt=0
-            checking=False
+            if self.verbose:
+                pre_depth_time= 0
+                delay_cnt=0
+                no_cnt=0
+                normal_cnt=0
+                checking=False
+
+                normal_duration = np.array([], dtype=np.float32)
+                record_duration = np.array([], dtype=np.float32)
+                timestamp_duration = np.array([],dtype=np.float32)
+                record_end = 0
             
-            normal_duration = np.array([], dtype=np.float32)
-            record_duration = np.array([], dtype=np.float32)
-            timestamp_duration = np.array([],dtype=np.float32)
-            record_end = 0
             while not self.stop_event.is_set():
                 frames = pipeline.wait_for_frames(35)
                 if frames is None:
@@ -340,19 +336,20 @@ class SingleOrbbec(mp.Process):
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
 
-                record_start=time.time_ns()
-                ################# user ################
-                if checking and self.verbose:
-                    if (depth.get_timestamp() - pre_depth_time) > 35:
-                        delay_cnt += 1
-                    if (depth.get_timestamp() == pre_depth_time):
-                        no_cnt += 1
-                    normal_cnt += 1
-                    pre_depth_time = depth.get_timestamp()
-                    record_duration=np.append(record_duration, (record_start-record_end)/1e6)
-                    timestamp_duration= np.append(timestamp_duration, receive_time)
-                #######################################
-                record_end =record_start
+                if self.verbose:
+                    ################# user ################
+                    record_start=time.time_ns()
+                    if checking and self.verbose:
+                        if (depth.get_timestamp() - pre_depth_time) > 35:
+                            delay_cnt += 1
+                        if (depth.get_timestamp() == pre_depth_time):
+                            no_cnt += 1
+                        normal_cnt += 1
+                        pre_depth_time = depth.get_timestamp()
+                        record_duration=np.append(record_duration, (record_start-record_end)/1e6)
+                        timestamp_duration= np.append(timestamp_duration, receive_time)
+                    record_end =record_start
+                    #######################################
 
                 if point_cloud is not None:
                     points_data = np.asarray(point_cloud, dtype=np.float32)
@@ -407,12 +404,6 @@ class SingleOrbbec(mp.Process):
                 if iter_idx ==0:
                     self.ready_event.set()
                 
-                # data['pointcloud'] = data['pointcloud'][data['pointcloud'][:, 2] > 0]  # Remove points with zero depth
-                # data['pointcloud'] = data['pointcloud'][::int(5 / 0.01) or 1]  # Downsample by 1 cm voxel size
-                
-                # here
-                # print(f"[single_orbbec] receive_tie: {receive_time}!")
-                
                 if self.video_recorder.is_ready():
                     self.video_recorder.write_frame(color_bgr, frame_time=receive_time)
                 if self.point_recorder.is_ready():
@@ -445,35 +436,37 @@ class SingleOrbbec(mp.Process):
                             start_time = None
                         # self.video_recorder.start(video_path, start_time=start_time)
                         self.point_recorder.start(point_path, start_time=start_time)
-                        checking=True
+                        if self.verbose:
+                            checking=True
                     elif cmd == Command.STOP_RECORDING.value:
                         # self.video_recorder.stop()
                         self.point_recorder.stop()
-                        checking=False
-                        print(f"delay_cnt: {delay_cnt}, normal_cnt: {normal_cnt}, no_cnt: {no_cnt}")
-                        print("normal_duration")
-                        print(f"    mean: {normal_duration.mean()}ms\n"
-                              f"    max: {normal_duration.max()}ms\n"
-                              f"    min: {normal_duration.min()}ms\n"
-                              f"    std: {normal_duration.std()}ms")
-                        print("record_duration")
-                        print(f"    mean: {record_duration.mean()}ms\n"
-                              f"    max: {record_duration.max()}ms\n"
-                              f"    min: {record_duration.min()}ms\n"
-                              f"    std: {record_duration.std()}ms")
-                        print(f"recorder_frame_count: {self.point_recorder.frame_count}")
-                        for i in range(10):
-                            print(f"{i} record_timestamp: {timestamp_duration[i]}")
-                        print(f"last record time: {timestamp_duration[-1]}")
-                        # debug
-                        timestamp=time.time()
-                        csv_filename = f"timestamp_duration_{timestamp}.csv"
-                        save_timestamp_duration_to_csv(timestamp_duration, csv_filename)
+                        if self.verbose:
+                            checking=False
+                            print(f"delay_cnt: {delay_cnt}, normal_cnt: {normal_cnt}, no_cnt: {no_cnt}")
+                            print("normal_duration")
+                            print(f"    mean: {normal_duration.mean()}ms\n"
+                                  f"    max: {normal_duration.max()}ms\n"
+                                  f"    min: {normal_duration.min()}ms\n"
+                                  f"    std: {normal_duration.std()}ms")
+                            print("record_duration")
+                            print(f"    mean: {record_duration.mean()}ms\n"
+                                  f"    max: {record_duration.max()}ms\n"
+                                  f"    min: {record_duration.min()}ms\n"
+                                  f"    std: {record_duration.std()}ms")
+                            print(f"recorder_frame_count: {self.point_recorder.frame_count}")
+                            for i in range(10):
+                                print(f"{i} record_timestamp: {timestamp_duration[i]}")
+                            print(f"last record time: {timestamp_duration[-1]}")
+                            # debug
+                            timestamp=time.time()
+                            csv_filename = f"timestamp_duration_{timestamp}.csv"
+                            save_timestamp_duration_to_csv(timestamp_duration, csv_filename)
                     elif cmd == Command.RESTART_PUT.value:
                         put_idx = None
                         put_start_time = command['put_start_time']
                 iter_idx += 1
-
+                
                 start_time = time.perf_counter()
                 elapsed = start_time - last_time 
                 sleep_time = max(0, target_interval - elapsed)

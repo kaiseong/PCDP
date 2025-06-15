@@ -1,3 +1,9 @@
+"""
+    용도: zarr로 저장된 pointcloud 시각화 재생용 코드
+    사용법: 원하는 episode_idx와 fps 값 넣어서 실행
+"""
+
+
 import zarr
 import numpy as np
 import open3d as o3d

@@ -22,7 +22,6 @@ from diffusion_policy.common.normalize_util import (
     get_identity_normalizer_from_stat,
     array_to_stats
 )
-# 수정된 포인트클라우드 변환 함수 import
 from diffusion_policy.real_world.pointcloud_data_conversion import real_pointcloud_data_to_replay_buffer
 
 class RealStackPointCloudDataset(BasePointCloudDataset):  
@@ -172,9 +171,8 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
                 self.replay_buffer[key])
         
-        # pointcloud - 단순화된 정규화 (검색 결과 [6] 참고)
+        # pointcloud 
         for key in self.pointcloud_keys:
-            # 포인트클라우드 전체를 하나의 정규화기로 처리
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
                 self.replay_buffer[key])
         
@@ -195,10 +193,10 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
 
         obs_dict = dict()
         for key in self.pointcloud_keys:
-            # T,N,6 포인트클라우드 데이터
-            # XYZ는 float32, RGB는 0-1 정규화
+            # T,N,6 pointcloud data
+            # XYZ is float32, RGB is 0-1 Normalization
             pc_data = data[key][T_slice].astype(np.float32)
-            # RGB 정규화 (0-255 → 0-1)
+            # RGB Normalization (0-255 → 0-1)
             pc_data[..., 3:6] = pc_data[..., 3:6] / 255.0
             obs_dict[key] = pc_data
             # save ram
@@ -241,17 +239,17 @@ def _get_pointcloud_replay_buffer(dataset_path, shape_meta, store, apply_preproc
         
         if type == 'pointcloud':
             pointcloud_keys.append(key)
-            # 포인트클라우드는 (N_points, 6) 형태
+            # pointcloud is (N_points, 6) shape
             assert len(shape) == 2 and shape[1] == 6, f"PointCloud shape must be (N, 6), got {shape}"
             n_points = shape[0]
         elif type == 'low_dim':
             lowdim_keys.append(key)
             lowdim_shapes[key] = tuple(shape)
             if 'pose' in key:
-                assert tuple(shape) in [(2,),(6,),(7,)]  # 7D 지원 추가
+                assert tuple(shape) in [(2,),(6,),(7,)]  # adding 7D support
     
     action_shape = tuple(shape_meta['action']['shape'])
-    assert action_shape in [(2,),(6,),(7,)]  # 7D 액션 지원
+    assert action_shape in [(2,),(6,),(7,)]  # adding 7D support
 
     # load data
     with threadpool_limits(1):
@@ -265,7 +263,7 @@ def _get_pointcloud_replay_buffer(dataset_path, shape_meta, store, apply_preproc
             use_cuda=use_cuda
         )
 
-    # transform lowdim dimensions - 7D 액션 지원
+    # transform lowdim dimensions - 7D action
     if action_shape == (2,):
         # 2D action space, only controls X and Y
         zarr_arr = replay_buffer['action']
@@ -274,7 +272,7 @@ def _get_pointcloud_replay_buffer(dataset_path, shape_meta, store, apply_preproc
         # 6D action space, 6DOF pose
         zarr_arr = replay_buffer['action']
         zarr_resize_index_last_dim(zarr_arr, idxs=[0,1,2,3,4,5])
-    # 7D는 그대로 유지 (6DOF + gripper)
+    # 7D (6DOF + gripper)
     
     for key, shape in lowdim_shapes.items():
         if 'pose' in key:
@@ -286,6 +284,5 @@ def _get_pointcloud_replay_buffer(dataset_path, shape_meta, store, apply_preproc
                 # 6DOF pose
                 zarr_arr = replay_buffer[key]
                 zarr_resize_index_last_dim(zarr_arr, idxs=[0,1,2,3,4,5])
-            # 7D는 그대로 유지
 
     return replay_buffer
