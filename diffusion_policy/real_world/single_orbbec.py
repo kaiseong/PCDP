@@ -113,7 +113,7 @@ class SingleOrbbec(mp.Process):
         # create shared array for intrinsics
         intrinsics_array = SharedNDArray.create_from_shape(
             mem_mgr=shm_manager,
-            shape=(6,), # 7차원이 맞는가?
+            shape=(6,), 
             dtype=np.float64)
         intrinsics_array.get()[:] = 0
 
@@ -264,7 +264,7 @@ class SingleOrbbec(mp.Process):
             align_to = ob.OBStreamType.DEPTH_STREAM
         
         w, h = self.resolution
-        fps = 30
+        fps = self.put_fps
 
         depth_profile = pipeline.get_stream_profile_list(ob.OBSensorType.DEPTH_SENSOR)\
                         .get_video_stream_profile(*depth_res,ob.OBFormat.Y16,fps)
@@ -305,9 +305,6 @@ class SingleOrbbec(mp.Process):
             iter_idx =0
             t_start = time.time_ns()
 
-            target_interval = 1/50
-            last_time = time.perf_counter()
-            
 
             # debuging
             if self.verbose:
@@ -323,24 +320,24 @@ class SingleOrbbec(mp.Process):
                 record_end = 0
             
             while not self.stop_event.is_set():
-                frames = pipeline.wait_for_frames(35)
+                frames = pipeline.wait_for_frames(10)
                 if frames is None:
                     continue
                 
                 depth, color = frames.get_depth_frame(), frames.get_color_frame()
                 if depth is None or color is None:
                     continue
-                receive_time = time.time()
                 
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
+                receive_time = time.time()
 
                 if self.verbose:
                     ################# user ################
                     record_start=time.time_ns()
                     if checking and self.verbose:
-                        if (depth.get_timestamp() - pre_depth_time) > 35:
+                        if (depth.get_timestamp() - pre_depth_time) > 70:
                             delay_cnt += 1
                         if (depth.get_timestamp() == pre_depth_time):
                             no_cnt += 1
@@ -364,7 +361,7 @@ class SingleOrbbec(mp.Process):
                 data = dict()
                 data['camera_receive_timestamp'] = receive_time
                 data['camera_capture_timestamp'] = depth.get_timestamp() / 1000.0
-                
+                 
                 data['pointcloud']=points_data
 
                 color_bgr = np.asarray(frame_to_bgr_image(color), dtype=np.uint8)
@@ -467,11 +464,6 @@ class SingleOrbbec(mp.Process):
                         put_start_time = command['put_start_time']
                 iter_idx += 1
                 
-                start_time = time.perf_counter()
-                elapsed = start_time - last_time 
-                sleep_time = max(0, target_interval - elapsed)
-                last_time = start_time
-                time.sleep(sleep_time)
 
                 
         except Exception as e:

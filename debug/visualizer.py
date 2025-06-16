@@ -142,4 +142,4 @@ def visualize_episode_pointcloud(output_dir, episode_idx, fps=30):
         vis.destroy_window()
 
 # 사용 예시
-visualize_episode_pointcloud("aa", episode_idx=2, fps=30)
+visualize_episode_pointcloud("aa", episode_idx=10, fps=15)

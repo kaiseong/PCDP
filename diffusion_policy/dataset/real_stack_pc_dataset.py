@@ -82,7 +82,9 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             replay_buffer = _get_pointcloud_replay_buffer(
                 dataset_path=dataset_path,
                 shape_meta=shape_meta,
-                store=zarr.MemoryStore()
+                store=zarr.MemoryStore(),
+                apply_preprocessing=apply_preprocessing,
+                use_cuda=use_cuda
             )
         
         if delta_action:

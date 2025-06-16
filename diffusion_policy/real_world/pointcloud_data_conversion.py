@@ -12,11 +12,21 @@ from diffusion_policy.common.timestamp_accumulator import get_accumulate_timesta
 import pytorch3d.ops as torch3d_ops
 import torch
 
+########################user defined functions########################
+import csv
+def save_timestamp_duration_to_csv(timestamps, filename):
+    """타임스탬프 배열을 CSV 파일로 저장"""
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['index', 'timestamp'])
+        for i, ts in enumerate(timestamps):
+            writer.writerow([i, ts])
+########################################################################
+
 def read_pointcloud_sequence(
         pointcloud_path: str, 
         dt: float, 
         start_time: float = 0.0,
-        downsample_factor: int = 1, 
         n_points: int = None,
     ) -> np.ndarray:
     try:
@@ -29,6 +39,7 @@ def read_pointcloud_sequence(
         
         current_point_idx = 0
         next_global_idx = 0
+        cnt = 0
         
         for frame_idx in range(len(timestamps)):
             frame_time = timestamps[frame_idx]
@@ -47,11 +58,9 @@ def read_pointcloud_sequence(
                 end_point_idx = current_point_idx + n_points
                 frame_points = points[start_point_idx:end_point_idx]
                 
-                if downsample_factor > 1:
-                    frame_points = frame_points[::downsample_factor]
                 
-                if N_points is not None and len(frame_points) > N_points:
-                    assert len(frame_points) >= N_points
+                if n_points is not None and len(frame_points) > n_points:
+                    assert len(frame_points) >= n_points
                 
                 for _ in range(len(global_idxs)):
                     yield frame_points
@@ -73,7 +82,6 @@ def real_pointcloud_data_to_replay_buffer(
         lowdim_compressor: Optional[numcodecs.abc.Codec] = None,
         pointcloud_compressor: Optional[numcodecs.abc.Codec] = None,
         n_points: int = 368640,
-        downsample_factor=1,
         n_decoding_threads: int = multiprocessing.cpu_count(),
         n_encoding_threads: int = multiprocessing.cpu_count(),
         max_inflight_tasks: int = multiprocessing.cpu_count() * 5,
@@ -134,6 +142,7 @@ def real_pointcloud_data_to_replay_buffer(
     if pointcloud_keys is None:
         pointcloud_keys = ['pointcloud']  
 
+
     with tqdm(total=n_steps * len(pointcloud_keys), desc="Loading pointcloud data", mininterval=1.0) as pbar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_encoding_threads) as executor:
             futures = set()
@@ -162,9 +171,7 @@ def real_pointcloud_data_to_replay_buffer(
                             pointcloud_path=str(episode_pointcloud_dir),
                             dt=dt,
                             start_time=episode_start_time,
-                            downsample_factor=downsample_factor,
-                            n_points=n_points,
-                            n_decoding_threads=n_decoding_threads
+                            n_points=n_points
                     )):
                         if len(futures) >= max_inflight_tasks:
                             completed, futures = concurrent.futures.wait(futures, 

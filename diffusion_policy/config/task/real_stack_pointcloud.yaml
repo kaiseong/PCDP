@@ -1,7 +1,7 @@
 name: real_stack_point
 
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: data/real_stack_pointcloud_demo
+dataset_path: aa
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -10,16 +10,13 @@ shape_meta: &shape_meta
       shape: ${task.pointcloud_shape}
       type: pointcloud
     robot_eef_pose:
-      shape: [7]  # 6DOF + gripper
+      shape: [6]  # 6DOF + gripper
       type: low_dim
     # robot_joint:
     #   shape: [7]  # 7개 관절
     #   type: low_dim
   action: 
-    shape: [7]  # 6DOF + gripper
-
-env_runner:
-  _target_: diffusion_policy.env_runner.real_stack_pointcloud_runner.RealStackPointCloudRunner
+    shape: [6]  # 6DOF + gripper
 
 dataset:
   _target_: diffusion_policy.dataset.real_stack_pc_dataset.RealStackPointCloudDataset
@@ -35,5 +32,10 @@ dataset:
   val_ratio: 0.00
   max_train_episodes: null
   delta_action: False
-  apply_preprocessing: True
+  apply_preprocessing: False
   use_cuda: True
+
+test:
+  batch_size: 4
+  num_workers: 2
+  benchmark_samples: 10

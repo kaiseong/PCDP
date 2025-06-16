@@ -4,7 +4,6 @@
 import numpy as np, open3d as o3d
 from pyorbbecsdk import *
 import time
-from point_recorder import PointCloudRecorder
 import zarr
 import os
 import math
@@ -19,8 +18,8 @@ def save_timestamp_duration_to_csv(timestamps, filename):
         for i, ts in enumerate(timestamps):
             writer.writerow([i, ts])
 
-episode=5
-zarr_path = f"./{episode}"
+episode=7
+zarr_path = f"/home/nscl/diffusion_policy/aa/orbbec_points.zarr/{episode}"
 if os.path.exists(zarr_path):
     zarr_store = zarr.DirectoryStore(zarr_path)
     root = zarr.open(store=zarr_store, mode='r')
@@ -41,22 +40,22 @@ all_timestamps = root['timestamps'][:] # (N_frames,)
 all_frame_indices = root['frame_indices'][:]  # (N_frames,)
 
 
-print(f"총 포인트 수: {len(all_points)}")
-print(f"총 프레임 수: {len(all_timestamps)}")
-print(f"0:100: {(all_timestamps[100:200]-all_timestamps[0])*1000}")
+# print(f"총 포인트 수: {len(all_points)}")
+# print(f"총 프레임 수: {len(all_timestamps)}")
+# print(f"0:100: {(all_timestamps[100:200]-all_timestamps[0])*1000}")
 print(f"first: {all_timestamps[0]}\n"
      f"last: {all_timestamps[-1]}")
 
 anormaly_cnt=0
 pre_time=0
 idxs=[]
-for idx, now in enumerate(all_timestamps):
-    if abs(now-pre_time)*1000<20 or abs(now-pre_time)*1000 > 40:
-        anormaly_cnt+=1
-        idxs.append(idx)
-    pre_time=now
-print(f"idx: {idxs}")
-print(f"anormaly_cnt: {anormaly_cnt}")
+# for idx, now in enumerate(all_timestamps):
+#     if abs(now-pre_time)*1000<20 or abs(now-pre_time)*1000 > 40:
+#         anormaly_cnt+=1
+#         idxs.append(idx)
+#     pre_time=now
+# print(f"idx: {idxs}")
+# print(f"anormaly_cnt: {anormaly_cnt}")
 
 csv_filename = f"epsiode_{episode}.csv"
 save_timestamp_duration_to_csv(all_timestamps, csv_filename)
