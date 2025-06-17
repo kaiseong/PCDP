@@ -28,6 +28,7 @@ def read_pointcloud_sequence(
         dt: float, 
         start_time: float = 0.0,
         n_points: int = None,
+        batch_size: int = 10
     ) -> np.ndarray:
     try:
         zarr_store = zarr.DirectoryStore(pointcloud_path)
@@ -39,33 +40,33 @@ def read_pointcloud_sequence(
         
         current_point_idx = 0
         next_global_idx = 0
-        cnt = 0
+        total_frames = len(timestamps)
         
-        for frame_idx in range(len(timestamps)):
-            frame_time = timestamps[frame_idx]
-            
+        # batch_size 10
+        for batch_start in range(0, total_frames, batch_size):
+            batch_end = min(batch_start + batch_size, total_frames)
+            batch_timestamps = timestamps[batch_start:batch_end]
+        
             local_idxs, global_idxs, next_global_idx = get_accumulate_timestamp_idxs(
-                timestamps=[frame_time],
+                timestamps=batch_timestamps.tolist(),
                 start_time=start_time,
                 dt=dt,
                 next_global_idx=next_global_idx
             )
-            
-            if len(global_idxs) > 0:
-                n_points = frame_indices[frame_idx]
+
+            # 올바른 드롭 프레임 보상 처리
+            for i, local_idx in enumerate(local_idxs):
+                actual_frame_idx = batch_start + local_idx  # 실제 프레임 인덱스
                 
-                start_point_idx = current_point_idx
-                end_point_idx = current_point_idx + n_points
-                frame_points = points[start_point_idx:end_point_idx]
+                n_frame_points = frame_indices[actual_frame_idx]
+                start_idx = sum(frame_indices[batch_start:actual_frame_idx])  # 누적 포인트 인덱스 계산
+                end_idx = start_idx + n_frame_points
+                frame_points = points[start_idx:end_idx]
                 
-                
-                if n_points is not None and len(frame_points) > n_points:
-                    assert len(frame_points) >= n_points
-                
-                for _ in range(len(global_idxs)):
-                    yield frame_points
-            
-            current_point_idx += frame_indices[frame_idx]
+                # global_idxs[i]만큼 yield (드롭 프레임 보상)
+                yield frame_points
+
+                current_point_idx += frame_indices[frame_idx]
             
     except Exception as e:
         print(f"Error reading pointcloud sequence: {e}")
@@ -137,11 +138,16 @@ def real_pointcloud_data_to_replay_buffer(
     episode_starts = in_replay_buffer.episode_ends[:] - in_replay_buffer.episode_lengths[:]
     episode_lengths = in_replay_buffer.episode_lengths
     timestamps = in_replay_buffer['timestamp'][:]
-    dt = timestamps[1] - timestamps[0]  
+    dt = timestamps[1] - timestamps[0]
 
     if pointcloud_keys is None:
         pointcloud_keys = ['pointcloud']  
 
+    robot_csv_file = "record_robot_timestamps.csv"
+    save_timestamp_duration_to_csv(timestamps, robot_csv_file)
+
+    csv_timestamps = np.array([], dtype=np.float32)
+    csv_filename = "record_orbbec_timestamps.csv"
 
     with tqdm(total=n_steps * len(pointcloud_keys), desc="Loading pointcloud data", mininterval=1.0) as pbar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_encoding_threads) as executor:
@@ -186,11 +192,14 @@ def real_pointcloud_data_to_replay_buffer(
                         if apply_preprocessing:
                             pointcloud = preprocess_point_cloud(pointcloud, use_cuda = use_cuda)
                         
+                        csv_timestamps = np.append(csv_timestamps, pointcloud)
+                        # print(f"step_idx: {step_idx}, cnt: {pointcloud}")
                         futures.add(executor.submit(put_pointcloud, arr, global_idx, pointcloud))
 
                         if step_idx == (episode_length - 1):
                             break
-            
+                        
+            save_timestamp_duration_to_csv(csv_timestamps, csv_filename)
             completed, futures = concurrent.futures.wait(futures)
             for f in completed:
                 if not f.result():
