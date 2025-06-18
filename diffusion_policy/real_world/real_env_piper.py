@@ -6,18 +6,18 @@ import shutil
 import math
 from multiprocessing.managers import SharedMemoryManager
 from diffusion_policy.real_world.piper_interpolation_controller import PiperInterpolationController
-from diffusion_policy.real_world.video_recorder import VideoRecorder
-from diffusion_policy.real_world.point_recorder import PointCloudRecorder
-from diffusion_policy.real_world.async_point_recorder import AsyncPointCloudRecorder
 from diffusion_policy.real_world.single_orbbec import SingleOrbbec
+from diffusion_policy.real_world.recorder import Recorder
 from diffusion_policy.common.timestamp_accumulator import (
     TimestampObsAccumulator, 
     TimestampActionAccumulator,
     align_timestamps
 )
+import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.cv2_util import (
     get_image_transform, optimal_row_cols)
+from termcolor import cprint
 
 DEFAULT_OBS_KEY_MAP = {
     # robot
@@ -47,60 +47,30 @@ class RealEnv:
             init_joints=False,
             # video capture params
             capture_fps=30,
-            # saving params
-            record_raw_video=True,
-            thread_per_video=2,
-            video_crf=21,
             # vis params
             orbbec_mode = "C2D",
             # shared memory
-            shm_manager=None
+            shm_manager=None,
             ):
         assert frequency <= capture_fps
         output_dir = pathlib.Path(output_dir)
         assert output_dir.parent.is_dir()
-        orbbec_video_dir = output_dir.joinpath('orbbec_videos')
-        orbbec_video_dir.mkdir(parents=True, exist_ok=True)
-        orbbec_point_dir = output_dir.joinpath('orbbec_points.zarr')
-        orbbec_point_dir.mkdir(parents=True, exist_ok=True)
-        zarr_path = str(output_dir.joinpath('replay_buffer.zarr').absolute())
-        replay_buffer = ReplayBuffer.create_from_path(
-            zarr_path=zarr_path, mode='a')
+
+        recorder_data_dir = output_dir.joinpath('recorder_data')
+        recorder_data_dir.mkdir(parents=True, exist_ok=True)
 
         if shm_manager is None:
             shm_manager = SharedMemoryManager()
             shm_manager.start()
         
-        recording_fps = capture_fps
-        recording_pix_fmt = 'bgr24'
-        if not record_raw_video:
-            recording_fps = frequency
-            recording_pix_fmt = 'rgb24'
-
         
-        orbbec_video_recorder = VideoRecorder.create_h264(
-            fps=recording_fps,
-            codec='h264',
-            input_pix_fmt=recording_pix_fmt,
-            crf = video_crf,
-            thread_type='FRAME',
-            thread_count=thread_per_video)
-
-        orbbec_point_recorder = AsyncPointCloudRecorder(
-            compression_level=2,
-            queue_size=120
-        )
         
         orbbec = SingleOrbbec(
             shm_manager=shm_manager,
             rgb_resolution = (1280, 720),
             put_fps = capture_fps,
-            video_record_fps = recording_fps,
             get_max_k = max_obs_buffer_size,
             mode=orbbec_mode,
-            recording_transform = None,
-            video_recorder=orbbec_video_recorder,
-            point_recorder=orbbec_point_recorder,
             verbose=True
         )
 
@@ -125,8 +95,18 @@ class RealEnv:
             get_max_k=max_obs_buffer_size
             )
         
+        recorder = Recorder(
+            shm_manager=shm_manager,
+            orbbec=orbbec,
+            robot=robot,
+            output_dir=str(recorder_data_dir),
+            compression_level=2,
+            frequency=100.0
+        )
+        
         self.orbbec = orbbec
         self.robot = robot
+        self.recorder = recorder
         self.capture_fps = capture_fps
         self.frequency = frequency
         self.n_obs_steps = n_obs_steps
@@ -136,9 +116,6 @@ class RealEnv:
         self.obs_key_map = obs_key_map
         # recording
         self.output_dir = output_dir
-        self.orbbec_video_dir = orbbec_video_dir
-        self.orbbec_point_dir = orbbec_point_dir
-        self.replay_buffer = replay_buffer
         # temp memory buffers
         self.last_orbbec_data = None
         # recording buffers
@@ -157,6 +134,7 @@ class RealEnv:
     def start(self, wait=True):
         self.orbbec.start(wait=False)
         self.robot.start(wait=False)
+        self.recorder.start(wait=False)
         if wait:
             self.start_wait()
 
@@ -164,6 +142,7 @@ class RealEnv:
         self.end_episode()
         self.robot.stop(wait=False)
         self.orbbec.stop(wait=False)
+        self.recorder.stop_process()
         if wait:
             self.stop_wait()
 
@@ -174,6 +153,7 @@ class RealEnv:
     def stop_wait(self):
         self.robot.stop_wait()
         self.orbbec.join()
+        self.recorder.join()
         # self.realsense.stop_wait()
         
     # ========= context manager ===========
@@ -198,7 +178,9 @@ class RealEnv:
         
         
         # 200 hz, robot_receive_timestamp
+        # buffer size is 30 
         last_robot_data = self.robot.get_all_state()
+        
         # both have more than n_obs_steps data
 
         # align camera obs timestamps
@@ -271,7 +253,8 @@ class RealEnv:
             stages = np.array(stages, dtype=np.int64)
 
         # convert action to pose
-        receive_time = time.time()
+        # receive_time = time.time()
+        receive_time = mono_time.now_s()
         is_new = timestamps > receive_time
         new_actions = actions[is_new]
         new_timestamps = timestamps[is_new]
@@ -283,6 +266,12 @@ class RealEnv:
                 pose=new_actions[i],
                 target_time=new_timestamps[i]
             )
+            if self.recorder.is_recording:
+                self.recorder.add_action(
+                    action=new_actions[i],
+                    timestamp=new_timestamps[i],
+                    stage=new_stages[i]
+                )
         
         # record actions
         if self.action_accumulator is not None:
@@ -303,91 +292,21 @@ class RealEnv:
     def start_episode(self, start_time=None):
         "Start recording and return first obs"
         if start_time is None:
-            start_time = time.time()
+            # start_time = time.time()
+            start_time = mono_time.now_s()
         self.start_time = start_time
 
-        assert self.is_ready
-
-        # prepare recording stuff
-        episode_id = self.replay_buffer.n_episodes
+        episode_id = self.recorder.obs_replay_buffer.n_episodes
+        self.recorder.start_recording(start_time, episode_id)
         
-        # start recording on orbbec
-        orbbec_video_dir = self.orbbec_video_dir.joinpath(str(episode_id))
-        orbbec_video_dir.mkdir(parents=True, exist_ok=True)
-        orbbec_video_path = str(orbbec_video_dir.joinpath('orbbec_view.mp4').absolute())
-        orbbec_point_dir = self.orbbec_point_dir.joinpath(str(episode_id))
-        orbbec_point_dir.mkdir(parents=True, exist_ok=True)
-        orbbec_point_path = str(orbbec_point_dir.joinpath())
-        self.orbbec.restart_put(start_time=start_time)
-        self.orbbec.start_recording(
-            video_path=orbbec_video_path, 
-            point_path=orbbec_point_path,
-            start_time=start_time
-        )
-
-        # create accumulators
-        self.obs_accumulator = TimestampObsAccumulator(
-            start_time=start_time,
-            dt=1/self.frequency
-        )
-        self.action_accumulator = TimestampActionAccumulator(
-            start_time=start_time,
-            dt=1/self.frequency
-        )
-        self.stage_accumulator = TimestampActionAccumulator(
-            start_time=start_time,
-            dt=1/self.frequency
-        )
-        print(f'Episode {episode_id} started!')
-        print(f"start_time: {self.start_time}")
     
     def end_episode(self):
         "Stop recording"
-        assert self.is_ready
+        self.recorder.stop_recording()
         
-        # stop video recorder
-        self.orbbec.stop_recording()
-
-        if self.obs_accumulator is not None:
-            # recording
-            assert self.action_accumulator is not None
-            assert self.stage_accumulator is not None
-
-            # Since the only way to accumulate obs and action is by calling
-            # get_obs and exec_actions, which will be in the same thread.
-            # We don't need to worry new data come in here.
-            obs_data = self.obs_accumulator.data
-            obs_timestamps = self.obs_accumulator.timestamps
-            
-
-            actions = self.action_accumulator.actions
-            action_timestamps = self.action_accumulator.timestamps
-            stages = self.stage_accumulator.actions
-            n_steps = min(len(obs_timestamps), len(action_timestamps))
-            if n_steps > 0:
-                episode = dict()
-                episode['timestamp'] = obs_timestamps[:n_steps]
-                episode['action'] = actions[:n_steps]
-                episode['stage'] = stages[:n_steps]
-                for key, value in obs_data.items():
-                    episode[key] = value[:n_steps]
-                self.replay_buffer.add_episode(episode, compressors='disk')
-                episode_id = self.replay_buffer.n_episodes - 1
-                print(f'Episode {episode_id} saved!')
-            
-            self.obs_accumulator = None
-            self.action_accumulator = None
-            self.stage_accumulator = None
 
     def drop_episode(self):
-        self.end_episode()
-        self.replay_buffer.drop_episode()
-        episode_id = self.replay_buffer.n_episodes
-        this_video_dir = self.orbbec_video_dir.joinpath(str(episode_id))
-        this_point_dir = self.orbbec_point_dir.joinpath(str(episode_id))
-        if this_video_dir.exists():
-            shutil.rmtree(str(this_video_dir))
-        if this_point_dir.exists():
-            shutil.rmtree(str(this_point_dir))
-        print(f'Episode {episode_id} dropped!')
+        # self.end_episode()
+        # self.replay_buffer.drop_episode()
+        self.recorder.drop_episode()
 

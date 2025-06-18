@@ -45,7 +45,7 @@ def main(cfg: DictConfig) -> None:
     # 데이터셋 경로 확인
     dataset_path = pathlib.Path(cfg.task.dataset_path)
     if not dataset_path.exists():
-        cprint(f"Error: Dataset path does not exist: {dataset_path}", "red")
+        cprint(f"Error: Dataset path does not exist: {dataset_path}", "red", attrs=["bold"])
         return
     
     required_files = [
@@ -55,7 +55,7 @@ def main(cfg: DictConfig) -> None:
     
     for file_path in required_files:
         if not file_path.exists():
-            cprint(f"Error: Required file missing: {file_path}", "red")
+            cprint(f"Error: Required file missing: {file_path}", "red", attrs=["bold"])
             return
     
     cprint("✓ All required files found", "green")

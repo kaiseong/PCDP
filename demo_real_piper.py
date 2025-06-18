@@ -22,10 +22,12 @@ import click
 import cv2
 import open3d as o3d
 import numpy as np
+from termcolor import cprint
 import scipy.spatial.transform as st
 from diffusion_policy.real_world.real_env_piper import RealEnv
 from diffusion_policy.real_world.joypad_shared_memory import JoypadSpacemouse
 from diffusion_policy.common.precise_sleep import precise_wait
+import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
@@ -46,11 +48,6 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 # recording resolution
                 frequency=frequency,
                 init_joints=init_joints,
-                record_raw_video=True,
-                # number of threads per camera view for video recording (H.264)
-                thread_per_video=1,
-                # video recording quality, lower is better (but slower).
-                video_crf=21,
                 orbbec_mode="C2D",
                 shm_manager=shm_manager
             ) as env:
@@ -112,7 +109,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                         stop = True
                     elif key_stroke == KeyCode(char='c'):
                         # Start recording
-                        env.start_episode(t_start + (iter_idx + 2) * dt - time.monotonic() + time.time())
+                        env.start_episode(mono_time.now_s()+2*dt)
                         key_counter.clear()
                         is_recording = True
                         print('Recording!')
@@ -135,7 +132,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 # if is_recording:
                     # print("recoding!")
                 vis_pc = obs["pointcloud"][-1].copy()
-                episode_id = env.replay_buffer.n_episodes
+                episode_id = env.recorder.obs_replay_buffer.n_episodes
                 text = f'Episode: {episode_id}, Stage: {stage}'
                 if is_recording:
                     text += ', Recording!'

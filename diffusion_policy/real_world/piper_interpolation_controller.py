@@ -13,6 +13,9 @@ from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
+import diffusion_policy.common.mono_time as mono_time
+from termcolor import cprint
+
 
 class Command(enum.Enum):
     """Command enum for the interpolation controller."""
@@ -105,7 +108,9 @@ class PiperInterpolationController(mp.Process):
             'TargetEndPose': (6,)
         }
         example = {k: np.zeros(shape_map[k], dtype=np.float64) for k in receive_keys}
-        example['robot_receive_timestamp'] = time.time()
+        # example['robot_receive_timestamp'] = time.time()
+        example['robot_receive_timestamp'] = mono_time.now_s()
+        
 
         ring_buffer = SharedMemoryRingBuffer.create_from_examples(
             shm_manager=shm_manager,
@@ -185,7 +190,8 @@ class PiperInterpolationController(mp.Process):
         self.input_queue.put(message)
     
     def schedule_waypoint(self, pose, target_time):
-        assert target_time > time.time()
+        # assert target_time > time.time()
+        assert target_time > mono_time.now_s()
         pose = np.asarray(pose,dtype=float)
         assert pose.shape == (6,)
 
@@ -217,17 +223,20 @@ class PiperInterpolationController(mp.Process):
             piper = C_PiperInterface_V2("can0")
             piper.ConnectPort()
         except Exception as e:
-            print(f"[PiperPositionalController] Failed to connect to Piper: {e}")
+            cprint(f"[Piper_Controller] Failed to connect to Piper: {e}", "magenta", attrs=["bold"])
             self.ready_event.set()
             return
         piper.EnableArm(7)
 
         enable_flag = False
         timeout = 5
-        start_time = time.time()
+        # start_time = time.time()
+        start_time = mono_time.now_s()
+
         elapsed_time_flag = False
         while not (enable_flag):
-            elapsed_time = time.time() - start_time
+            # elapsed_time = time.time() - start_time
+            elapsed_time = mono_time.now_s() - start_time
             print("--------------------")
             enable_flag = piper.GetArmLowSpdInfoMsgs().motor_1.foc_status.driver_enable_status and \
                 piper.GetArmLowSpdInfoMsgs().motor_2.foc_status.driver_enable_status and \
@@ -252,7 +261,8 @@ class PiperInterpolationController(mp.Process):
 
         try:
             if self.verbose:
-                print(f"[PiperPoisionalController] Connect to robot: {piper.GetCanFps()} Hz")
+                cprint(f"[Piper_Controller] Connect to robot: {piper.GetCanFps()} Hz",
+                        "magenta", attrs=["bold"])
 
             #set parameters
             if self.payload_mass is not None:
@@ -279,6 +289,7 @@ class PiperInterpolationController(mp.Process):
 
             iter_idx = 0
             keep_running=True
+            cprint(f"[Piper_Controller] Main loop started.", "magenta", attrs=["bold"])
             
             while keep_running:
                 # start control iteration
@@ -309,7 +320,8 @@ class PiperInterpolationController(mp.Process):
                 
                 state["ArmJointMsgs"] = np.deg2rad(state["ArmJointMsgs"])
                 state["TargetEndPose"] = target_pose_vec
-                state["robot_receive_timestamp"] = time.time()
+                # state["robot_receive_timestamp"] = time.time()
+                state["robot_receive_timestamp"] = mono_time.now_s()
                 self.ring_buffer.put(state)
 
                 # fetch command from queue
@@ -349,13 +361,14 @@ class PiperInterpolationController(mp.Process):
                         last_waypoint_time=t_insert
                         if self.verbose:
                             if iter_idx % 100==0:
-                                print("[PiperPositionalController] New pose target: {} duration: {}s".format(
-                                    target_pose, duration))
+                                cprint(f"[Piper_Controller] New pose target: {target_pose} duration: {duration}s",
+                                        "magenta", attrs=["bold"])
                     elif cmd == Command.SCHEDULE_WAYPOINT.value:
                         target_pose = command['target_pose']
                         target_time = float(command['target_time'])
                         # translate global time to monotonic time
-                        target_time = time.monotonic() - time.time() + target_time
+                        # target_time = time.monotonic() - time.time() + target_time
+                        target_time = mono_time.now_s() - mono_time.wall_from_mono(0) + target_time
                         curr_time = t_now + dt
                         pose_interp = pose_interp.schedule_waypoint(
                             pose=target_pose,
@@ -374,7 +387,8 @@ class PiperInterpolationController(mp.Process):
                 iter_idx += 1
 
                 if self.verbose:
-                    print(f"[PiperPositionalController] Actual frequency {1/(time.perf_counter() - loop_start)}")
+                    cprint(f"[Piper_Controller] Actual frequency {1/(time.perf_counter() - loop_start)}",
+                            "magenta", attrs=["bold"])
                 spent = time.perf_counter() - loop_start
                 if spent < dt:
                     time.sleep(dt - spent)
@@ -392,4 +406,4 @@ class PiperInterpolationController(mp.Process):
             self.ready_event.set()
 
             if self.verbose:
-                print(f"[PiperPositionalController] Disconnect from robot")
+                cprint(f"[PiperPositionalController] Disconnect from robot", "magenta", attrs=["bold"])
