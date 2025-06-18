@@ -108,7 +108,6 @@ class PiperInterpolationController(mp.Process):
             'TargetEndPose': (6,)
         }
         example = {k: np.zeros(shape_map[k], dtype=np.float64) for k in receive_keys}
-        # example['robot_receive_timestamp'] = time.time()
         example['robot_receive_timestamp'] = mono_time.now_s()
         
 
@@ -190,8 +189,7 @@ class PiperInterpolationController(mp.Process):
         self.input_queue.put(message)
     
     def schedule_waypoint(self, pose, target_time):
-        # assert target_time > time.time()
-        assert target_time > mono_time.now_s()
+        assert target_time > mono_time.now_s()-0.002 # 2ms tolerance
         pose = np.asarray(pose,dtype=float)
         assert pose.shape == (6,)
 
@@ -230,12 +228,11 @@ class PiperInterpolationController(mp.Process):
 
         enable_flag = False
         timeout = 5
-        # start_time = time.time()
+
         start_time = mono_time.now_s()
 
         elapsed_time_flag = False
         while not (enable_flag):
-            # elapsed_time = time.time() - start_time
             elapsed_time = mono_time.now_s() - start_time
             print("--------------------")
             enable_flag = piper.GetArmLowSpdInfoMsgs().motor_1.foc_status.driver_enable_status and \
@@ -320,7 +317,6 @@ class PiperInterpolationController(mp.Process):
                 
                 state["ArmJointMsgs"] = np.deg2rad(state["ArmJointMsgs"])
                 state["TargetEndPose"] = target_pose_vec
-                # state["robot_receive_timestamp"] = time.time()
                 state["robot_receive_timestamp"] = mono_time.now_s()
                 self.ring_buffer.put(state)
 
@@ -366,9 +362,6 @@ class PiperInterpolationController(mp.Process):
                     elif cmd == Command.SCHEDULE_WAYPOINT.value:
                         target_pose = command['target_pose']
                         target_time = float(command['target_time'])
-                        # translate global time to monotonic time
-                        # target_time = time.monotonic() - time.time() + target_time
-                        target_time = mono_time.now_s() - mono_time.wall_from_mono(0) + target_time
                         curr_time = t_now + dt
                         pose_interp = pose_interp.schedule_waypoint(
                             pose=target_pose,

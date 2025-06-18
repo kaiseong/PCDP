@@ -79,7 +79,7 @@ class Recorder(mp.Process):
         # Data buffers for synchronization
         self.robot_buffer = deque(maxlen=max_buffer_size)
         self.action_buffer = deque(maxlen=max_buffer_size)
-        self.orbbec_buffer = deque(maxlen=100)
+        self.orbbec_buffer = deque(maxlen=30)
 
 
         # Frame counters
@@ -345,16 +345,13 @@ class Recorder(mp.Process):
         
         try:
             while not self.stop_event.is_set():
-                # start_time = time.time()
                 start_time = mono_time.now_s()
                 
                 # Process commands
                 self._process_commands()
                 
                 # Read data from both sources
-                # 계속 orbbec_buffer에 최신 데이터 쌓음 새로 업데이트 되면 True로 반환
                 orbbec_updated = self._read_orbbec_data()
-                # 비슷하지만 다르게 최신 데이터 쌓음
                 robot_updated = self._read_robot_data()
                 
                 # If recording and we have new orbbec data
@@ -362,7 +359,6 @@ class Recorder(mp.Process):
                     self._process_new_data()
                     
                 # Maintain polling frequency (10ms)
-                # elapsed = time.time() - start_time
                 elapsed = mono_time.now_s() - start_time
                 sleep_time = max(0, self.polling_dt - elapsed)
                 if sleep_time > 0:

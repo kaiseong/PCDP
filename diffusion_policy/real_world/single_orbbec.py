@@ -132,7 +132,6 @@ class SingleOrbbec(mp.Process):
     # ========= user API ===========
     def start(self, wait=True, put_start_time=None):
         if put_start_time is None:
-            # put_start_time=time.time()
             put_start_time = mono_time.now_s()
         self.put_start_time = put_start_time
         super().start()
@@ -224,7 +223,6 @@ class SingleOrbbec(mp.Process):
             put_idx = None
             put_start_time = self.put_start_time
             if put_start_time is None:
-                # put_start_time = time.time()
                 put_start_time = mono_time.now_s()
             
             iter_idx =0
@@ -239,7 +237,6 @@ class SingleOrbbec(mp.Process):
                 if depth is None or color is None:
                     continue
                 
-                # receive_time = time.time()
                 receive_time = mono_time.now_s()
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())

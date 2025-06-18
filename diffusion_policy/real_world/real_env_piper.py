@@ -253,7 +253,6 @@ class RealEnv:
             stages = np.array(stages, dtype=np.int64)
 
         # convert action to pose
-        # receive_time = time.time()
         receive_time = mono_time.now_s()
         is_new = timestamps > receive_time
         new_actions = actions[is_new]
@@ -292,7 +291,6 @@ class RealEnv:
     def start_episode(self, start_time=None):
         "Start recording and return first obs"
         if start_time is None:
-            # start_time = time.time()
             start_time = mono_time.now_s()
         self.start_time = start_time
 
