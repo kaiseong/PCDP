@@ -10,6 +10,8 @@ from multiprocessing.managers import SharedMemoryManager
 import zarr
 import numcodecs
 from collections import deque
+import shutil
+import queue
 
 from diffusion_policy.common.timestamp_accumulator import align_timestamps
 from diffusion_policy.shared_memory.shared_ndarray import SharedNDArray
@@ -38,6 +40,156 @@ class RecorderCommand:
     DROP = 2
 
 
+
+class EpisodeStreamer:
+    def __init__(
+            self,
+            episode_dir: pathlib.Path,
+            save_batch_size: int = 30,
+            compression_level: int =2,
+    ):
+        self.episode_dir = episode_dir
+        self.episode_dir.mkdir(parents=True, exist_ok=True)
+        self.save_batch_size = save_batch_size
+        self.compression_level = compression_level
+
+        # Batch buffers
+        self.obs_batch_buffer = []
+        self.action_batch_buffer = []
+        
+        # Zarr arrays
+        self.obs_arrays = {}
+        self.action_arrays = {}
+        self.obs_total_frames = 0
+        self.action_total_frames = 0
+
+        # Replay buffers
+        obs_zarr_path = str(self.episode_dir.joinpath('obs_replay_buffer.zarr').absolute())
+        action_zarr_path = str(self.episode_dir.joinpath('action_replay_buffer.zarr').absolute())
+        self.obs_replay_buffer = ReplayBuffer.create_from_path(zarr_path=obs_zarr_path, mode='a')
+        self.action_replay_buffer = ReplayBuffer.create_from_path(zarr_path=action_zarr_path, mode='a')
+        cprint(f"[EpisodeStreamer] Created for {episode_dir}", "blue", attrs=["bold"])
+    
+    def add_obs_data(self, obs_data: dict):
+        self.obs_batch_buffer.append(obs_data)
+        if len(self.obs_batch_buffer) >= self.save_batch_size:
+            self._flush_obs_batch()
+    
+    def add_action_data(self, action_data: dict):
+        self.action_batch_buffer.append(action_data)
+        if len(self.action_batch_buffer) >= self.save_batch_size:
+            self._flush_action_batch()
+    
+    def _flush_obs_batch(self):
+        if not self.obs_batch_buffer:
+            return
+        
+        try:
+            batch_data = {}
+            for key in ['pointcloud', 'robot_eef_pose', 'robot_joint', 
+                'robot_gripper', 'robot_eef_target','align_timestamp', 
+                'robot_timestamp', 'capture_timestamp'
+            ]:
+                batch_data[key] = np.array([obs[key] for obs in self.obs_batch_buffer])
+            # Zarr 배열에 직접 추가
+            
+            self._append_to_zarr_arrays(batch_data, 'obs')
+            self.obs_total_frames += len(self.obs_batch_buffer)
+            
+            # batch buffer clear
+            self.obs_batch_buffer.clear()
+        except Exception as e:
+            cprint(f"[Recorder] Error flushing obs batch: {e}", "cyan", attrs=["bold"])
+
+    def _flush_action_batch(self):
+        if not self.action_batch_buffer:
+            return
+        
+        try:
+            batch_data = {}
+            for key in ['action', 'timestamp', 'stage']:
+                batch_data[key] = np.array([action[key] for action in self.action_batch_buffer])
+            
+            # Zarr 배열에 직접 추가
+            self._append_to_zarr_arrays(batch_data, 'action')
+            self.action_total_frames += len(self.action_batch_buffer)
+            
+            # batch buffer clear
+            self.action_batch_buffer.clear()
+        except Exception as e:
+            cprint(f"[Recorder] Error flushing action batch: {e}", "cyan", attrs=["bold"])
+
+    def _append_to_zarr_arrays(self, batch_data: dict, data_type: str):
+        if data_type == 'obs':
+            arrays = self.obs_arrays
+            replay_buffer = self.obs_replay_buffer
+        elif data_type == 'action':
+            arrays = self.action_arrays
+            replay_buffer = self.action_replay_buffer
+        
+        
+        batch_size = len(next(iter(batch_data.values())))
+
+        for key, value in batch_data.items():
+            if key not in arrays:
+                # 새 배열 생성
+                initial_shape = (batch_size,) + value.shape[1:]
+                chunks = (min(256, batch_size),) + value.shape[1:]
+
+                zarr_group = replay_buffer.data
+
+                compressor = numcodecs.Blosc(
+                    cname='zstd', 
+                    clevel=1, 
+                    shuffle=numcodecs.Blosc.BITSHUFFLE
+                )
+                
+                
+                arrays[key] = zarr_group.zeros(
+                    name=key,
+                    shape=initial_shape,
+                    chunks=chunks,
+                    dtype=value.dtype,
+                    compressor=compressor
+                )
+            else:
+                # 기존 배열에 추가
+                arr = arrays[key]
+                new_shape = (arr.shape[0] + batch_size,) + arr.shape[1:]
+                arr.resize(new_shape)
+        
+            # 데이터 쓰기
+            arr = arrays[key]
+            arr[-batch_size:] = value.astype(arr.dtype, copy=False)
+
+    def finalize_episode(self):
+        # 남은 배치 데이터 플러시
+        if self.obs_batch_buffer:
+            self._flush_obs_batch()
+        if self.action_batch_buffer:
+            self._flush_action_batch()
+        
+        # episode_ends 업데이트
+        if self.obs_total_frames > 0:
+            episode_ends = self.obs_replay_buffer.episode_ends
+            if len(episode_ends) == 0:
+                episode_ends.resize(1)
+                episode_ends[0] = self.obs_total_frames
+            else:
+                episode_ends.resize(len(episode_ends)+1)
+                episode_ends[-1] = episode_ends[-2] + self.obs_total_frames
+        
+        if self.action_total_frames > 0:
+            episode_ends = self.action_replay_buffer.episode_ends
+            if len(episode_ends) == 0:
+                episode_ends.resize(1)
+                episode_ends[0] = self.action_total_frames
+            else:
+                episode_ends.resize(len(episode_ends)+1)
+                episode_ends[-1] = episode_ends[-2] + self.action_total_frames
+        cprint(f"[Recorder] Episode finalized with {self.obs_total_frames} obs frames and {self.action_total_frames} action frames", 
+                "cyan", attrs=["bold"])
+
 class Recorder(mp.Process):
     """
     Unified data recorder that replaces async_point_recorder and point_recorder.
@@ -53,7 +205,8 @@ class Recorder(mp.Process):
         output_dir: str,
         compression_level: int = 2,
         frequency: float = 100.0,  # 10ms polling
-        max_buffer_size: int = 30
+        max_buffer_size: int = 30,
+        save_batch_size: int = 1
     ):
         super().__init__(name="Recorder")
         
@@ -64,23 +217,21 @@ class Recorder(mp.Process):
         self.compression_level = compression_level
         self.polling_dt = 1.0 / frequency  # 0.01s = 10ms
         self.max_buffer_size = max_buffer_size
+        self.save_batch_size = save_batch_size
         
+        # episode manage
+        self.episode_counter = self._get_latest_episode_id()
+        self.episode_streamer = None
+
         # Recording state
         self.recording = False
         self.start_time = None
         self.episode_id = None
         
-        # Zarr storage
-        obs_zarr_path = str(self.output_dir.joinpath('obs_replay_buffer.zarr').absolute())
-        action_zarr_path = str(self.output_dir.joinpath('action_replay_buffer.zarr').absolute())
-        self.obs_replay_buffer = ReplayBuffer.create_from_path(zarr_path=obs_zarr_path, mode ='a')
-        self.action_replay_buffer = ReplayBuffer.create_from_path(zarr_path=action_zarr_path, mode ='a')
-
         # Data buffers for synchronization
         self.robot_buffer = deque(maxlen=max_buffer_size)
         self.action_buffer = deque(maxlen=max_buffer_size)
         self.orbbec_buffer = deque(maxlen=30)
-
 
         # Frame counters
         self.last_orbbec_timestamp = -1
@@ -101,7 +252,38 @@ class Recorder(mp.Process):
             examples=command_examples,
             buffer_size=64
         )
-            
+
+        action_example = {
+            'action': np.zeros(6, dtype = np.float64),
+            'timestamp': 0.0,
+            'stage': 0
+        }
+
+        self.action_queue = SharedMemoryQueue.create_from_examples(
+            shm_manager=shm_manager,
+            examples=action_example,
+            buffer_size=256
+        )
+    
+    def _get_latest_episode_id(self):
+        if not self.output_dir.exists():
+            return 0
+        
+        max_id = -1
+        for item in self.output_dir.iterdir():
+            if item.is_dir() and item.name.startswith('episode_'):
+                try:
+                    episode_id = int(item.name.split('_')[1])
+                    max_id = max(max_id, episode_id)
+                except ValueError:
+                    continue
+        return max_id + 1
+
+    def get_episode_dir(self, episode_id: int):
+        """ 에피소드 디렉토리 경로 생성"""
+        return self.output_dir / f"episode_{episode_id:04d}"
+    
+
     def start_recording(self, start_time: float, episode_id: int):
         """Start recording from the specified start_time"""
         try:
@@ -136,13 +318,15 @@ class Recorder(mp.Process):
 
     def add_action(self, action: np.ndarray, timestamp: float, stage: int =0):
         """Add action to the action buffer"""
-        if self.recording:
-            action_data = {
+        try:
+            self.action_queue.put({
                 'action': action,
                 'timestamp': timestamp,
                 'stage': stage
-            }
-            self.action_buffer.append(action_data)
+            })
+        except Full:
+            cprint(f"[Recorder] Action queue full", "cyan", attrs=["bold"])
+
     
     def start(self, wait=True):
         super().start()
@@ -216,25 +400,6 @@ class Recorder(mp.Process):
         
         return indices
 
-    
-
-    def _save_actions(self):
-        if not self.action_buffer:
-            return
-        
-        try:
-            actions = np.array([action['action'] for action in self.action_buffer])
-            timestamps = np.array([action['timestamp'] for action in self.action_buffer])
-            stages = np.array([action['stage'] for action in self.action_buffer])
-            action_data = {
-                'action': actions,
-                'timestamp': timestamps,
-                'stage': stages
-            }
-            self.action_replay_buffer.add_episode(action_data, compressors='disk')
-        except Exception as e:
-            cprint(f"[Recorder] Error saving actions: {e}", "cyan", attrs=["bold"])
-
     def _process_new_data(self):
         processed = 0
         MAX_BATCH = 3
@@ -260,7 +425,7 @@ class Recorder(mp.Process):
         for i, orbbec_data in enumerate(orbbec_data_list):
             if i < len(robot_indices):
                 robot_idx = robot_indices[i]
-                if robot_idx <len(self.robot_buffer):
+                if robot_idx < len(self.robot_buffer):
                     robot_data = self.robot_buffer[robot_idx]
                     obs_data={
                         'pointcloud': orbbec_data['pointcloud'],
@@ -274,25 +439,23 @@ class Recorder(mp.Process):
                     }
                     paired_obs.append(obs_data)
 
-        if paired_obs:
-            self._save_obs_batch(paired_obs)
+        if paired_obs and self.episode_streamer:
+            for obs_data in paired_obs:
+                self.episode_streamer.add_obs_data(obs_data)
     
-    def _save_obs_batch(self, obs_batch: list):
-        if not obs_batch:
-            return
-        
+    def _process_action_queue(self):
         try:
-            batch_data = {}
-            for key in ['pointcloud', 'robot_eef_pose', 'robot_joint', 'robot_gripper', 'robot_eef_target',
-                        'align_timestamp', 'robot_timestamp', 'capture_timestamp']:
-                batch_data[key] = np.array([obs[key] for obs in obs_batch])
-            
-            self.obs_replay_buffer.add_episode(batch_data, compressors='disk')
-            del batch_data
-            obs_batch.clear()
-            
-        except Exception as e:
-            cprint(f"[Recorder] Error saving observation batch: {e}", "cyan", attrs=["bold"])
+            actions = self.action_queue.get_all()
+            if len(actions['action']) > 0 and self.episode_streamer:
+                for i in range(len(actions['action'])):
+                    action_data = {
+                        'action': actions['action'][i],
+                        'timestamp': actions['timestamp'][i],
+                        'stage': actions['stage'][i]
+                    }
+                    self.episode_streamer.add_action_data(action_data)
+        except Empty:
+            pass
     
     def _process_commands(self):
         """Process recording commands"""
@@ -306,31 +469,50 @@ class Recorder(mp.Process):
                 if cmd == RecorderCommand.START:
                     if not self.recording:
                         self.start_time = commands['start_time'][i]
-                        self.episode_id = commands['episode_id'][i]
+                        self.episode_id = self.episode_counter
+                        self.episode_counter += 1
+
+                        # new episode_stemaer create
+                        episode_dir = self.get_episode_dir(self.episode_id)
+                        self.episode_streamer = EpisodeStreamer(
+                            episode_dir, self.save_batch_size, compression_level=self.compression_level
+                        )
+
                         self.recording = True
                         self.recording_event.set()
                         
                         self.orbbec_buffer.clear()
                         self.robot_buffer.clear()
-                        self.action_buffer.clear()
+
                         cprint(f"[Recorder] Started recording episode {self.episode_id} from time {self.start_time}", 
                                 "cyan", attrs=["bold"])
                 
                 elif cmd == RecorderCommand.STOP:
-                    if self.recording:
+                    if self.recording and self.episode_streamer:
                         self._process_new_data()
-                        self._save_actions()
+
+                        self.episode_streamer.finalize_episode()
+                        self.episode_streamer = None
+
                         self.recording = False
                         self.recording_event.clear()
                         cprint(f"[Recorder] saved episode {self.episode_id}.", "cyan", attrs=["bold"])
                 
                 elif cmd == RecorderCommand.DROP:
+                    if self.episode_streamer:
+                        self.episode_streamer = None
+                    
                     self.recording = False
                     self.recording_event.clear()
-                    if self.obs_replay_buffer.n_episodes > 0:
-                        self.obs_replay_buffer.drop_episode()
-                    if self.action_replay_buffer.n_episodes > 0:
-                        self.action_replay_buffer.drop_episode()
+
+                    if self.episode_counter > 0:
+                        latest_episode_id = self.episode_counter -1
+                        latest_episode_dir = self.get_episode_dir(latest_episode_id)
+                        if latest_episode_dir.exists():
+                            shutil.rmtree(latest_episode_dir)
+                            cprint(f"[Recorder] Dropped episode {latest_episode_id}",
+                                    "cyan", attrs=["bold"])
+                        self.episode_counter = latest_episode_id
                         
         except Empty:
             pass
@@ -341,7 +523,7 @@ class Recorder(mp.Process):
     def run(self):
         """Main recorder loop"""
         cprint(f"[Recorder] Starting recorder process", "cyan", attrs=["bold"])
-        cprint(f"[Recorder] now episode: {self.obs_replay_buffer.n_episodes}", "cyan", attrs=["bold"])
+        cprint(f"[Recorder] now episode: {self.n_episodes}", "cyan", attrs=["bold"])
         
         try:
             while not self.stop_event.is_set():
@@ -353,6 +535,7 @@ class Recorder(mp.Process):
                 # Read data from both sources
                 orbbec_updated = self._read_orbbec_data()
                 robot_updated = self._read_robot_data()
+                self._process_action_queue()
                 
                 # If recording and we have new orbbec data
                 if self.recording and orbbec_updated:
@@ -369,11 +552,24 @@ class Recorder(mp.Process):
             import traceback
             traceback.print_exc()
         finally:
-            if self.recording:
-                pass
+            if self.recording and self.episode_streamer:
+                self.episode_streamer.finalize_episode()
             cprint("[Recorder] Recorder process ended", "cyan", attrs=["bold"])
     
     @property
     def is_recording(self):
         """Check if currently recording"""
         return self.recording_event.is_set()
+    
+    @property
+    def n_episodes(self):
+        return self.episode_counter
+    
+
+    def get_episode_list(self):
+        episodes = []
+        if self.output_dir.exists():
+            for item in sorted(self.output_dir.iterdir()):
+                if item.is_dir() and item.name.startswith('episode'):
+                    episodes.append(item.name)
+        return episodes

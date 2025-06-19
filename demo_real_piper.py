@@ -78,7 +78,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             print('Ready!')
             state = env.get_robot_state()
             target_pose = base_pose.copy()
-            t_start = time.monotonic()
+            t_start = mono_time.now_s()
             iter_idx = 0
             stop = False
             is_recording = False
@@ -131,7 +131,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 # if is_recording:
                     # print("recoding!")
                 vis_pc = obs["pointcloud"][-1].copy()
-                episode_id = env.recorder.obs_replay_buffer.n_episodes
+                episode_id = env.recorder.n_episodes
                 text = f'Episode: {episode_id}, Stage: {stage}'
                 if is_recording:
                     text += ', Recording!'

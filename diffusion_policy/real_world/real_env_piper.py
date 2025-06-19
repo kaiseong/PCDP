@@ -258,7 +258,6 @@ class RealEnv:
         new_actions = actions[is_new]
         new_timestamps = timestamps[is_new]
         new_stages = stages[is_new]
-
         # schedule waypoints
         for i in range(len(new_actions)):
             self.robot.schedule_waypoint(
@@ -271,7 +270,7 @@ class RealEnv:
                     timestamp=new_timestamps[i],
                     stage=new_stages[i]
                 )
-        
+
         # record actions
         if self.action_accumulator is not None:
             self.action_accumulator.put(
@@ -294,7 +293,7 @@ class RealEnv:
             start_time = mono_time.now_s()
         self.start_time = start_time
 
-        episode_id = self.recorder.obs_replay_buffer.n_episodes
+        episode_id = self.recorder.n_episodes
         self.recorder.start_recording(start_time, episode_id)
         
     

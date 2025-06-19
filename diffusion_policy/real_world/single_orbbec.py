@@ -71,7 +71,7 @@ class SingleOrbbec(mp.Process):
             shm_manager=shm_manager,
             examples=examples,
             get_max_k=get_max_k,
-            get_time_budget=0.016 ,
+            get_time_budget=0.018,
             put_desired_frequency=put_fps
         )
 
@@ -203,6 +203,9 @@ class SingleOrbbec(mp.Process):
         pc_filter.set_camera_param(cam_param)
         pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
         
+        pre_time = 0
+        anormaly_cnt=0
+
         try:
             if self.mode == "D2C":
                 intr = cam_param.rgb_intrinsic
@@ -241,6 +244,11 @@ class SingleOrbbec(mp.Process):
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
+                depth_time = depth.get_timestamp()
+                if (depth_time - pre_time) > 35:
+                    anormaly_cnt+=1
+                pre_time=depth_time
+
 
                 if point_cloud is not None:
                     points_data = np.asarray(point_cloud, dtype=np.float32)
@@ -254,7 +262,7 @@ class SingleOrbbec(mp.Process):
 
                 data = dict()
                 data['camera_receive_timestamp'] = receive_time
-                data['camera_capture_timestamp'] = depth.get_timestamp() 
+                data['camera_capture_timestamp'] = depth_time
                 
                 data['pointcloud']=points_data
 
@@ -302,6 +310,7 @@ class SingleOrbbec(mp.Process):
         finally:
             pipeline.stop()
             self.ready_event.set()
+            cprint(f"anormaly_cnt: {anormaly_cnt}", "green", attrs=["bold"])
             if self.verbose:
                 cprint("[SingleOrbbec] Main loop ended, resources cleaned up.", "green", attrs=["bold"])
 
