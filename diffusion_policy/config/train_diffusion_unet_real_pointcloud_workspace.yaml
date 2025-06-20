@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: real_stack_point
+  - task: real_stack_pointcloud
 
 name: train_diffusion_unet_pointcloud
 _target_: diffusion_policy.workspace.train_diffusion_unet_pointcloud_workspace.TrainDiffusionUnetPointCloudWorkspace

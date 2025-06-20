@@ -1,7 +1,7 @@
-name: real_stack_point
+name: real_stack_pointcloud
 
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: aa
+dataset_path: bb
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -34,8 +34,3 @@ dataset:
   delta_action: False
   apply_preprocessing: False
   use_cuda: True
-
-test:
-  batch_size: 4
-  num_workers: 2
-  benchmark_samples: 10

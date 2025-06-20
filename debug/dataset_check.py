@@ -83,6 +83,58 @@ class EpisodeAnalyzer:
                 })
         
         return summary
+    
+def point_cloud_visualize(obs_episode):
+    """
+    에피소드의 포인트 클라우드 시퀀스를 동영상처럼 재생하여 시각화합니다.
+    실시간 렌더링 모범 사례를 적용하여 수정되었습니다[1].
+    """
+    pts_seq = obs_episode['pointcloud']
+    if len(pts_seq) == 0:
+        print("시각화할 포인트 클라우드 데이터가 없습니다.")
+        return
+
+    vis = o3d.visualization.Visualizer()
+    vis.create_window("Point Cloud Sequence", width=1280, height=720)
+    
+    opt = vis.get_render_option()
+    opt.point_size = 1.0
+    opt.background_color = np.array([0, 0, 0])
+    
+    pcd = o3d.geometry.PointCloud()
+    is_first_frame = True
+    
+    print("포인트 클라우드 시퀀스를 재생합니다. (창이 활성화된 상태에서 'Q'를 누르면 종료됩니다)")
+    
+    for i, pts in enumerate(pts_seq):
+        xyz = pts[:, :3].astype(np.float64)
+        rgb = pts[:, 3:6].astype(np.float64) / 255.0
+        
+        pcd.points = o3d.utility.Vector3dVector(xyz)
+        pcd.colors = o3d.utility.Vector3dVector(rgb)
+        
+        if is_first_frame:
+            vis.add_geometry(pcd)
+            # 카메라 뷰 초기 설정
+            ctr = vis.get_view_control()
+            ctr.set_lookat(pcd.get_axis_aligned_bounding_box().get_center())
+            ctr.set_front([0.0, 0.0, -1.0])
+            ctr.set_up([0.0, -1.0, 0.0])
+            ctr.set_zoom(0.4)
+            is_first_frame = False
+        else:
+            vis.update_geometry(pcd)
+        
+        # 렌더링 업데이트 및 이벤트 처리
+        if not vis.poll_events():
+            break # 창이 닫혔을 경우 루프 종료
+        vis.update_renderer()
+        
+        # 재생 속도 조절 (예: 30fps)
+        time.sleep(1/30) 
+            
+    print("시각화 종료.")
+    vis.destroy_window()
 
 def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     """에피소드 데이터 품질 분석"""
@@ -122,26 +174,28 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
             if now-pre_time > 35.0:
                 cnt +=1
             pre_time=now
+        
         print(f"cnt: {cnt}")
-
-
-        with open("obs_dataset.csv", 'w', newline='') as csvfile:
+        
+        with open(f"{episode_name}_obs_dataset.csv", 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'capture_time'])
             for i in range(len(obs_align_timestamp)):
                 writer.writerow([i, obs_align_timestamp[i], obs_robot_timestamp[i], obs_capture_timestamp[i]])
         
-        action_csv='action_dataset.csv'
+        action_csv=f'{episode_name}_action_dataset.csv'
         save_timestamp_duration_to_csv(action_timestamps, action_csv)
+        point_cloud_visualize(obs_episode)
+            
 
 # 사용 예시
 analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/bb/recorder_data")
-summary = analyzer.get_episode_summary()
-print(f"총 에피소드 수: {summary['total_episodes']}")
-for detail in summary['episode_details']:
-    print(f"{detail['name']}: {detail.get('obs_steps', 'N/A')} obs steps, "
-          f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
+# summary = analyzer.get_episode_summary()
+# print(f"총 에피소드 수: {summary['total_episodes']}")
+# for detail in summary['episode_details']:
+#     print(f"{detail['name']}: {detail.get('obs_steps', 'N/A')} obs steps, "
+#           f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
 
 # 사용 예시
-obs_buffer, action_buffer = analyzer.load_episode('episode_0004')
-analyze_episode_quality(obs_buffer, action_buffer, 'episode_0004')
+obs_buffer, action_buffer = analyzer.load_episode('episode_0001')
+analyze_episode_quality(obs_buffer, action_buffer, 'episode_0001')

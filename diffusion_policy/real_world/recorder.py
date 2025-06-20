@@ -46,7 +46,7 @@ class EpisodeStreamer:
             self,
             episode_dir: pathlib.Path,
             save_batch_size: int = 30,
-            compression_level: int =2,
+            compression_level: int =3,
     ):
         self.episode_dir = episode_dir
         self.episode_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ class EpisodeStreamer:
 
                 compressor = numcodecs.Blosc(
                     cname='zstd', 
-                    clevel=1, 
+                    clevel=self.compression_level, 
                     shuffle=numcodecs.Blosc.BITSHUFFLE
                 )
                 
@@ -203,7 +203,7 @@ class Recorder(mp.Process):
         orbbec: SingleOrbbec,
         robot: PiperInterpolationController,
         output_dir: str,
-        compression_level: int = 2,
+        compression_level: int = 3,
         frequency: float = 100.0,  # 10ms polling
         max_buffer_size: int = 30,
         save_batch_size: int = 1
@@ -218,6 +218,11 @@ class Recorder(mp.Process):
         self.polling_dt = 1.0 / frequency  # 0.01s = 10ms
         self.max_buffer_size = max_buffer_size
         self.save_batch_size = save_batch_size
+        self.writer_queue = queue.Queue(maxsize=1024)
+        self.writer_thread = threading.Thread(
+            target=self._writer_loop,
+            daemon=True
+        )
         
         # episode manage
         self.episode_counter = self._get_latest_episode_id()
@@ -231,7 +236,7 @@ class Recorder(mp.Process):
         # Data buffers for synchronization
         self.robot_buffer = deque(maxlen=max_buffer_size)
         self.action_buffer = deque(maxlen=max_buffer_size)
-        self.orbbec_buffer = deque(maxlen=30)
+        self.orbbec_buffer = deque(maxlen=90)
 
         # Frame counters
         self.last_orbbec_timestamp = -1
@@ -437,12 +442,9 @@ class Recorder(mp.Process):
                         'robot_timestamp': robot_data['robot_receive_timestamp'],
                         'capture_timestamp': orbbec_data['camera_capture_timestamp']
                     }
-                    paired_obs.append(obs_data)
+                    
+                    self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
 
-        if paired_obs and self.episode_streamer:
-            for obs_data in paired_obs:
-                self.episode_streamer.add_obs_data(obs_data)
-    
     def _process_action_queue(self):
         try:
             actions = self.action_queue.get_all()
@@ -453,7 +455,7 @@ class Recorder(mp.Process):
                         'timestamp': actions['timestamp'][i],
                         'stage': actions['stage'][i]
                     }
-                    self.episode_streamer.add_action_data(action_data)
+                    self.writer_queue.put_nowait({'type':'action', 'data': action_data})
         except Empty:
             pass
     
@@ -468,6 +470,7 @@ class Recorder(mp.Process):
                 
                 if cmd == RecorderCommand.START:
                     if not self.recording:
+                        
                         self.start_time = commands['start_time'][i]
                         self.episode_id = self.episode_counter
                         self.episode_counter += 1
@@ -475,7 +478,9 @@ class Recorder(mp.Process):
                         # new episode_stemaer create
                         episode_dir = self.get_episode_dir(self.episode_id)
                         self.episode_streamer = EpisodeStreamer(
-                            episode_dir, self.save_batch_size, compression_level=self.compression_level
+                            episode_dir, 
+                            self.save_batch_size, 
+                            compression_level=self.compression_level
                         )
 
                         self.recording = True
@@ -490,6 +495,9 @@ class Recorder(mp.Process):
                 elif cmd == RecorderCommand.STOP:
                     if self.recording and self.episode_streamer:
                         self._process_new_data()
+
+                        self.writer_queue.put({'type': "FLUSH"})
+                        self.writer_queue.join()
 
                         self.episode_streamer.finalize_episode()
                         self.episode_streamer = None
@@ -519,14 +527,50 @@ class Recorder(mp.Process):
         except Exception as e:
             cprint(f"[Recorder] Error processing commands: {e}", "cyan")
     
+    def _writer_loop(self):
+        buffer = []
+        while True:
+            item = self.writer_queue.get()
+            if item['type'] == 'FLUSH':
+                if buffer:
+                    self._save_batch(buffer)
+                    buffer.clear()
+                self.writer_queue.task_done()
+                continue
+
+            if item['type'] == 'TERMINATE':
+                if buffer:
+                    self._save_batch(buffer)
+                self.writer_queue.task_done()
+                break
+
+            buffer.append(item)     
+
+            if len(buffer) >= self.save_batch_size:
+                self._save_batch(buffer)
+                buffer.clear() 
+            self.writer_queue.task_done()
+        
+        
+
+    def _save_batch(self, batch):
+        for item in batch:
+            if not self.episode_streamer:
+                continue
+            if item['type'] == 'obs':
+                self.episode_streamer.add_obs_data(item["data"])
+            elif item['type'] == 'action':
+                self.episode_streamer.add_action_data(item["data"])
+            
 
     def run(self):
         """Main recorder loop"""
         cprint(f"[Recorder] Starting recorder process", "cyan", attrs=["bold"])
         cprint(f"[Recorder] now episode: {self.n_episodes}", "cyan", attrs=["bold"])
-        
+        self.writer_thread.start()
         try:
             while not self.stop_event.is_set():
+                
                 start_time = mono_time.now_s()
                 
                 # Process commands
@@ -553,7 +597,13 @@ class Recorder(mp.Process):
             traceback.print_exc()
         finally:
             if self.recording and self.episode_streamer:
+                self._process_new_data()
+                self.writer_queue.put({'type':'FLUSH'})
+                self.writer_queue.join()
                 self.episode_streamer.finalize_episode()
+            self.writer_queue.put({'type':'TERMINATE'})
+            self.writer_queue.join()
+            self.writer_thread.join(timeout=1.0)
             cprint("[Recorder] Recorder process ended", "cyan", attrs=["bold"])
     
     @property
