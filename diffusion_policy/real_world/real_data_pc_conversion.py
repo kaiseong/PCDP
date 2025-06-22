@@ -1,5 +1,5 @@
-# conversion.py
-from typing import Sequence, Tuple, Dict, Optional, Union
+# real_data_pc_conversion.py
+from typing import Sequence, Tuple, Dict, Optional, Union, List
 import os
 import pathlib
 import numpy as np
@@ -25,14 +25,14 @@ class PointCloudPreprocessor:
     """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
     
     def __init__(self, 
-                 extrinsics_matrix=None,
-                 workspace_bounds=None,
-                 target_num_points=1024,
-                 enable_transform=True,
-                 enable_cropping=True,
-                 enable_sampling=True,
-                 use_cuda=True,
-                 verbose=False):
+                extrinsics_matrix=None,
+                workspace_bounds=None,
+                target_num_points=1024,
+                enable_transform=True,
+                enable_cropping=True,
+                enable_sampling=True,
+                use_cuda=True,
+                verbose=False):
         """
         Initialize pointcloud preprocessor.
         
@@ -101,15 +101,15 @@ class PointCloudPreprocessor:
         # Ensure points is float32
         points = points.astype(np.float32)
         
-        # 1. Coordinate transformation
+        # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
             
-        # 2. Workspace cropping
+        # Workspace cropping
         if self.enable_cropping:
             points = self._crop_workspace(points)
             
-        # 3. Point sampling
+        # Point FPS sampling
         if self.enable_sampling:
             points = self._sample_points(points)
             
@@ -243,7 +243,7 @@ def downsample_obs_data(obs_data, downsample_factor=3):
     downsampled_data = {}
     for key, value in obs_data.items():
         if isinstance(value, np.ndarray) and len(value.shape) > 0:
-            downsampled_data[key] = value[::downsample_factor]
+            downsampled_data[key] = value[::downsample_factor].copy()
         else:
             downsampled_data[key] = value
     return downsampled_data
@@ -295,45 +295,9 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
             aligned_action_data[key] = value[aligned_action_indices]
         else:
             aligned_action_data[key] = value
-    
-    print(f"Aligned {len(valid_indices)} obs-action pairs from {len(obs_timestamps)} obs and {len(action_timestamps)} actions")
+    # print(f"Aligned {len(valid_indices)} obs-action pairs from {len(obs_timestamps)} obs and {len(action_timestamps)} actions")
     return aligned_obs_data, aligned_action_data, valid_indices
 
-
-def load_episode_data(episode_path):
-    """
-    Load obs and action data from a single episode directory.
-    
-    Args:
-        episode_path: Path to episode directory containing zarr files
-        
-    Returns:
-        obs_data: Dictionary of observation data
-        action_data: Dictionary of action data
-    """
-    episode_path = pathlib.Path(episode_path)
-    
-    obs_zarr_path = episode_path / 'obs_replay_buffer.zarr'
-    action_zarr_path = episode_path / 'action_replay_buffer.zarr'
-    
-    if not obs_zarr_path.exists() or not action_zarr_path.exists():
-        raise FileNotFoundError(f"Missing zarr files in {episode_path}")
-    
-    # Load obs data
-    obs_store = zarr.DirectoryStore(str(obs_zarr_path))
-    obs_root = zarr.open(store=obs_store, mode='r')
-    obs_data = {}
-    for key in obs_root.keys():
-        obs_data[key] = obs_root[key][:]
-    
-    # Load action data  
-    action_store = zarr.DirectoryStore(str(action_zarr_path))
-    action_root = zarr.open(store=action_store, mode='r')
-    action_data = {}
-    for key in action_root.keys():
-        action_data[key] = action_root[key][:]
-        
-    return obs_data, action_data
 
 
 def process_single_episode(episode_path, preprocessor=None, downsample_factor=3):
@@ -348,9 +312,26 @@ def process_single_episode(episode_path, preprocessor=None, downsample_factor=3)
     Returns:
         episode_data: Dictionary containing processed episode data
     """
-    # Load raw data
-    obs_data, action_data = load_episode_data(episode_path)
+
+    episode_path = pathlib.Path(episode_path)
     
+    obs_zarr_path = episode_path / 'obs_replay_buffer.zarr'
+    action_zarr_path = episode_path / 'action_replay_buffer.zarr'
+    
+    if not obs_zarr_path.exists() or not action_zarr_path.exists():
+        raise FileNotFoundError(f"Missing zarr files in {episode_path}")
+    
+    obs_replay_buffer = ReplayBuffer.create_from_path(str(obs_zarr_path), mode='r')
+    action_replay_buffer = ReplayBuffer.create_from_path(str(action_zarr_path), mode='r')
+
+    obs_data ={}
+    for key in obs_replay_buffer.keys():
+        obs_data[key] = obs_replay_buffer[key][:]
+    
+    action_data ={}
+    for key in action_replay_buffer.keys():
+        action_data[key] = action_replay_buffer[key][:]
+
     # Downsample obs data from 30Hz to 10Hz
     downsampled_obs = downsample_obs_data(obs_data, downsample_factor)
     downsampled_obs_timestamps = downsampled_obs['align_timestamp']
@@ -452,6 +433,10 @@ def validate_episode_data_with_shape_meta(episode_data: dict, shape_meta: dict) 
         if key in episode_data:
             data = episode_data[key]
             expected_shape = lowdim_configs[key]['shape']
+            if len(expected_shape)==1:
+                if expected_shape[0] == 1 and len(data.shape) == 1:
+                    continue
+
             if len(data.shape) >= 1:
                 # Check that last dimensions match expected shape
                 if data.shape[-len(expected_shape):] != expected_shape:
@@ -527,10 +512,10 @@ def _get_replay_buffer(
         raise ValueError("No episode directories found")
     
     # Create ReplayBuffer
-    replay_buffer = ReplayBuffer.create_empty_zarr(store=store)
+    replay_buffer = ReplayBuffer.create_empty_zarr(storage=store)
     
     # Process episodes
-    with tqdm(total=len(episode_dirs), desc="Processing episodes") as pbar:
+    with tqdm(total=len(episode_dirs), desc="Processing episodes", mininterval=1.0) as pbar:
         for episode_dir in episode_dirs:
             try:
                 episode_data = process_single_episode(
@@ -557,27 +542,6 @@ def _get_replay_buffer(
             pbar.update(1)
     
     print(f"Successfully processed {replay_buffer.n_episodes} episodes "
-          f"with {replay_buffer.n_steps} total steps")
+        f"with {replay_buffer.n_steps} total steps")
     
     return replay_buffer
-
-
-def test_preprocessing():
-    """Test preprocessing functionality."""
-    # Create sample pointcloud data
-    n_points = 100000
-    sample_points = np.random.randn(n_points, 6).astype(np.float32)
-    sample_points[:, :3] *= 1000  # mm scale
-    sample_points[:, 3:] = np.random.randint(0, 255, (n_points, 3))  # RGB
-    
-    # Test preprocessor
-    preprocessor = create_default_preprocessor(target_num_points=1024, verbose=True)
-    processed_points = preprocessor.process(sample_points)
-    
-    print(f"Original points: {sample_points.shape}")
-    print(f"Processed points: {processed_points.shape}")
-    print(f"XYZ range: {processed_points[:, :3].min(axis=0)} - {processed_points[:, :3].max(axis=0)}")
-
-
-if __name__ == "__main__":
-    test_preprocessing()

@@ -76,7 +76,6 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
         assert isinstance(dataset, BasePointCloudDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
-
         # configure validataion dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
@@ -85,8 +84,7 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
         # self.model.set_normalizer(normalizer)
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer)
-        """
-
+        
         # configure lr scheduler
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
@@ -97,7 +95,7 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
                     // cfg.training.gradient_accumulate_every,
             last_epoch = self.global_step-1
         )
-        """
+        
         # configure ema
         ema: EMAModel = None
         if cfg.training.use_ema:
@@ -137,9 +135,12 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
-        """
         # save batch or sampling
         train_sampling_batch = None
+        """
+        device = torch.device(cfg.training.device)
+
+        import time
 
         if cfg.training.debug:
             cfg.training.num_epochs = 2
@@ -153,7 +154,7 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
-            for local_epoch_idx in range(cfg.training.numepochs):
+            for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ====== train for this epoch ======
                 """
@@ -162,13 +163,22 @@ class TrainDiffusionUnetPointCloudWorkspace(BaseWorkspace):
                     self.model.obs_encoder.requires_gard_(False)
                 """
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, dsec=f"Training epoch {self.epoch}",
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        if train_sampling_batch is None:
-                            train_sampling_batch = batch
+                        # print(f"batch_obs: {batch['obs'].keys()}")
+                        # print(f"debug: {batch['obs']['align_timestamp'].shape}")
+                        print(f"batch idx: {batch_idx}")
+                        for idx in range(batch['action'].shape[0]):
+                            print(f"{idx} time: {batch['obs']['align_timestamp'][idx]}")
+                            print(f"{idx} action: {batch['action'][idx][:3]}")
+                        time.sleep(10)
+
+                            
+
+
                         
         self.global_step += 1
         self.epoch += 1

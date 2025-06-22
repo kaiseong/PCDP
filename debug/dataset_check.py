@@ -189,7 +189,7 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
             
 
 # 사용 예시
-analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/bb/recorder_data")
+analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/cc/recorder_data")
 # summary = analyzer.get_episode_summary()
 # print(f"총 에피소드 수: {summary['total_episodes']}")
 # for detail in summary['episode_details']:
@@ -197,5 +197,5 @@ analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/bb/recorder_data")
 #           f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
 
 # 사용 예시
-obs_buffer, action_buffer = analyzer.load_episode('episode_0001')
-analyze_episode_quality(obs_buffer, action_buffer, 'episode_0001')
+obs_buffer, action_buffer = analyzer.load_episode('episode_0003')
+analyze_episode_quality(obs_buffer, action_buffer, 'episode_0003')

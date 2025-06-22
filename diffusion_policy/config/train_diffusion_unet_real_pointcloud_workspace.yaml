@@ -1,3 +1,4 @@
+# train_diffusion_unet_real_pointcloud_workspace.yaml
 defaults:
   - _self_
   - task: real_stack_pointcloud

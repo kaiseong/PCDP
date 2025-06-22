@@ -1,7 +1,8 @@
+# real_stack_pointcloud.yaml
 name: real_stack_pointcloud
 
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: bb
+dataset_path: cc/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -15,6 +16,12 @@ shape_meta: &shape_meta
     # robot_joint:
     #   shape: [7]  # 7개 관절
     #   type: low_dim
+    robot_gripper:
+      shape: [3]
+      type: low_dim
+    align_timestamp:
+      shape: [1]
+      type: low_dim
   action: 
     shape: [6]  # 6DOF + gripper
 
@@ -31,6 +38,26 @@ dataset:
   seed: 42
   val_ratio: 0.00
   max_train_episodes: null
-  delta_action: False
-  apply_preprocessing: False
-  use_cuda: True
+  
+
+  enable_preprocessing: False
+  preprocessor_config:
+    target_num_points: 1024
+    enable_transform: False
+    enable_cropping: False
+    enable_sampling: False
+    use_cuda: True
+    verbose: False
+    # Camera to robot transformation matrix (4x4)
+    extrinsics_matrix:
+      - [ 0.5213259,  -0.84716441,  0.10262438,  0.04268034]
+      - [ 0.25161211,  0.26751035,  0.93012341,  0.15598059]
+      - [-0.81542053, -0.45907589,  0.3526169,   0.47807532]
+      - [ 0.0,          0.0,          0.0,          1.0]
+    
+    # Workspace bounds [x_min, x_max], [y_min, y_max], [z_min, z_max]
+    workspace_bounds:
+      - [0.65, 1.1]    # X range (meters)
+      - [0.45, 0.66]   # Y range (meters)  
+      - [-0.7, 0.0]    # Z range (meters)
+

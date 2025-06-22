@@ -1,3 +1,4 @@
+# real_stack_pc_dataset.py
 from typing import Dict, List
 import torch
 import numpy as np
@@ -11,20 +12,19 @@ import json
 import hashlib
 import copy
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.dataset.base_dataset import BasePointCloudDataset 
+from diffusion_policy.dataset.base_dataset import BasePointCloudDataset
 from diffusion_policy.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
 from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.real_world.real_data_pc_conversion import _get_replay_buffer, PointCloudPreprocessor
 from diffusion_policy.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
 from diffusion_policy.common.normalize_util import (
     get_range_normalizer_from_stat,
-    get_image_range_normalizer,
     get_identity_normalizer_from_stat,
     array_to_stats
 )
-from diffusion_policy.real_world.pointcloud_data_conversion import real_pointcloud_data_to_replay_buffer
 
-class RealStackPointCloudDataset(BasePointCloudDataset):  
+class RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
             dataset_path: str,
@@ -37,15 +37,38 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             seed=42,
             val_ratio=0.0,
             max_train_episodes=None,
-            delta_action=False,
-            apply_preprocessing=False,
-            use_cuda=False
+            # Preprocessing parameters (configurable via YAML)
+            enable_preprocessing=True,
+            preprocessor_config=None
         ):
-        assert os.path.isdir(dataset_path)
+        """
+        Pointcloud-based dataset for Piper robot demonstrations.
+        
+        Args:
+            shape_meta: Dictionary defining the shape and type of observations and actions
+            dataset_path: Path to the recorder_data directory containing episode folders
+            horizon: Number of action steps to predict
+            pad_before: Number of steps to pad before the sequence
+            pad_after: Number of steps to pad after the sequence
+            n_obs_steps: Number of observation steps to use (if None, use all)
+            n_latency_steps: Number of latency steps to account for
+            use_cache: Whether to use caching for faster loading
+            seed: Random seed for reproducibility
+            val_ratio: Ratio of episodes to use for validation
+            max_train_episodes: Maximum number of training episodes to use
+            enable_preprocessing: Whether to enable pointcloud preprocessing
+            preprocessor_config: Configuration for pointcloud preprocessing
+        """
+        assert os.path.isdir(dataset_path), f"Dataset path does not exist: {dataset_path}"
+        
+        # Setup preprocessor if enabled
+        preprocessor = None
+        if enable_preprocessing:
+            preprocessor = self._create_preprocessor(preprocessor_config or {})
         
         replay_buffer = None
         if use_cache:
-            # fingerprint shape_meta
+            # fingerprint shape_meta for cache validation
             shape_meta_json = json.dumps(OmegaConf.to_container(shape_meta), sort_keys=True)
             shape_meta_hash = hashlib.md5(shape_meta_json.encode('utf-8')).hexdigest()
             cache_zarr_path = os.path.join(dataset_path, shape_meta_hash + '.zarr.zip')
@@ -53,15 +76,14 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             print('Acquiring lock on cache.')
             with FileLock(cache_lock_path):
                 if not os.path.exists(cache_zarr_path):
-                    # cache does not exists
+                    # cache does not exist
                     try:
                         print('Cache does not exist. Creating!')
-                        replay_buffer = _get_pointcloud_replay_buffer(
+                        replay_buffer = _get_replay_buffer(
                             dataset_path=dataset_path,
                             shape_meta=shape_meta,
                             store=zarr.MemoryStore(),
-                            apply_preprocessing=apply_preprocessing,
-                            use_cuda=use_cuda
+                            preprocessor=preprocessor
                         )
                         print('Saving cache to disk.')
                         with zarr.ZipStore(cache_zarr_path) as zip_store:
@@ -79,43 +101,35 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
                             src_store=zip_store, store=zarr.MemoryStore())
                     print('Loaded!')
         else:
-            replay_buffer = _get_pointcloud_replay_buffer(
+            replay_buffer = _get_replay_buffer(
                 dataset_path=dataset_path,
                 shape_meta=shape_meta,
                 store=zarr.MemoryStore(),
-                apply_preprocessing=apply_preprocessing,
-                use_cuda=use_cuda
+                preprocessor=preprocessor
             )
         
-        if delta_action:
-            # replace action as relative to previous frame
-            actions = replay_buffer['action'][:]
-            # support 7D action (6DOF + gripper)
-            assert actions.shape[1] <= 7
-            actions_diff = np.zeros_like(actions)
-            episode_ends = replay_buffer.episode_ends[:]
-            for i in range(len(episode_ends)):
-                start = 0
-                if i > 0:
-                    start = episode_ends[i-1]
-                end = episode_ends[i]
-                # delta action is the difference between previous desired position and the current
-                actions_diff[start+1:end] = np.diff(actions[start:end], axis=0)
-            replay_buffer['action'][:] = actions_diff
-
+        # Parse shape meta to identify pointcloud and lowdim keys dynamically
         pointcloud_keys = list()
         lowdim_keys = list()
-        obs_shape_meta = shape_meta['obs']
+        
+        obs_shape_meta = shape_meta.get('obs', {})
         for key, attr in obs_shape_meta.items():
-            type = attr.get('type', 'low_dim')
-            if type == 'pointcloud':
+            obs_type = attr.get('type', 'low_dim')
+            if obs_type == 'pointcloud':
                 pointcloud_keys.append(key)
-            elif type == 'low_dim':
+            elif obs_type == 'low_dim':
                 lowdim_keys.append(key)
+                
+        print(f"Parsed observation keys from shape_meta:")
+        print(f"  - Pointcloud keys: {pointcloud_keys}")
+        print(f"  - Low-dim keys: {lowdim_keys}")
+
+        # Validate that replay buffer contains expected keys
+        self._validate_replay_buffer_keys(replay_buffer, pointcloud_keys, lowdim_keys)
         
         key_first_k = dict()
         if n_obs_steps is not None:
-            # only take first k obs from pointclouds
+            # only take first k obs from pointcloud and lowdim data
             for key in pointcloud_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
 
@@ -149,6 +163,60 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         self.pad_before = pad_before
         self.pad_after = pad_after
 
+    
+    def _validate_replay_buffer_keys(self, replay_buffer: ReplayBuffer, pointcloud_keys: List[str], lowdim_keys: List[str]):
+        """
+        Validate that replay buffer contains all expected keys from shape_meta.
+        
+        Args:
+            replay_buffer: The loaded replay buffer
+            pointcloud_keys: Expected pointcloud keys
+            lowdim_keys: Expected lowdim keys
+        """
+        buffer_keys = set(replay_buffer.keys())
+        
+        # Check pointcloud keys
+        for key in pointcloud_keys:
+            if key not in buffer_keys:
+                raise ValueError(f"Expected pointcloud key '{key}' not found in replay buffer. "
+                               f"Available keys: {list(buffer_keys)}")
+        
+        # Check lowdim keys
+        for key in lowdim_keys:
+            if key not in buffer_keys:
+                raise ValueError(f"Expected lowdim key '{key}' not found in replay buffer. "
+                               f"Available keys: {list(buffer_keys)}")
+        
+        # Check action key
+        if 'action' not in buffer_keys:
+            raise ValueError("Expected 'action' key not found in replay buffer. "
+                           f"Available keys: {list(buffer_keys)}")
+        
+        print(f"Validation passed: All expected keys found in replay buffer")
+
+    def _create_preprocessor(self, config: dict):
+        """
+        Create pointcloud preprocessor from configuration.
+        
+        Args:
+            config: Preprocessor configuration dictionary
+            
+        Returns:
+            PointCloudPreprocessor instance
+        """
+        
+        
+        return PointCloudPreprocessor(
+            extrinsics_matrix=config.get('extrinsics_matrix'),
+            workspace_bounds=config.get('workspace_bounds'),
+            target_num_points=config.get('target_num_points', 1024),
+            enable_transform=config.get('enable_transform', True),
+            enable_cropping=config.get('enable_cropping', True),
+            enable_sampling=config.get('enable_sampling', True),
+            use_cuda=config.get('use_cuda', True),
+            verbose=config.get('verbose', False)
+        )
+
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler = SequenceSampler(
@@ -164,20 +232,22 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
         normalizer = LinearNormalizer()
 
-        # action (7D: 6DOF + gripper)
+        # action
         normalizer['action'] = SingleFieldLinearNormalizer.create_fit(
             self.replay_buffer['action'])
         
-        # obs
+        # lowdim obs - use standard normalization
         for key in self.lowdim_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
                 self.replay_buffer[key])
         
-        # pointcloud 
+        # pointcloud - use identity normalizer (no normalization)
+        # 실제 거리를 정규화하면, 거리 정보를 온전히 이해 못할 수도 있음, => 강인성에서 멀어짐
         for key in self.pointcloud_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_fit(
-                self.replay_buffer[key])
-        
+            # Get stats but don't actually normalize pointcloud data
+            # stats = array_to_stats(self.replay_buffer[key][:])
+            # normalizer[key] = get_identity_normalizer_from_stat(stats)
+            normalizer[key] = SingleFieldLinearNormalizer.create_identity(dtype=torch.float32)
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
@@ -191,19 +261,21 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         data = self.sampler.sample_sequence(idx)
 
         # to save RAM, only return first n_obs_steps of OBS
+        # since the rest will be discarded anyway.
+        # when self.n_obs_steps is None
+        # this slice does nothing (takes all)
         T_slice = slice(self.n_obs_steps)
 
         obs_dict = dict()
+        
+        # process pointcloud data
         for key in self.pointcloud_keys:
-            # T,N,6 pointcloud data
-            # XYZ is float32, RGB is 0-1 Normalization
-            pc_data = data[key][T_slice].astype(np.float32)
-            # RGB Normalization (0-255 → 0-1)
-            pc_data[..., 3:6] = pc_data[..., 3:6] / 255.0
-            obs_dict[key] = pc_data
+            # Keep pointcloud as T,N,6 (time, points, XYZRGB)
+            obs_dict[key] = data[key][T_slice].astype(np.float32)
             # save ram
             del data[key]
             
+        # process lowdim data    
         for key in self.lowdim_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             # save ram
@@ -211,6 +283,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         
         action = data['action'].astype(np.float32)
         # handle latency by dropping first n_latency_steps action
+        # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
             action = action[self.n_latency_steps:]
 
@@ -219,72 +292,3 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             'action': torch.from_numpy(action)
         }
         return torch_data
-
-def zarr_resize_index_last_dim(zarr_arr, idxs):
-    actions = zarr_arr[:]
-    actions = actions[...,idxs]
-    zarr_arr.resize(zarr_arr.shape[:-1] + (len(idxs),))
-    zarr_arr[:] = actions
-    return zarr_arr
-
-def _get_pointcloud_replay_buffer(dataset_path, shape_meta, store, apply_preprocessing, use_cuda):
-    # parse shape meta
-    pointcloud_keys = list()
-    lowdim_keys = list()
-    lowdim_shapes = dict()
-    obs_shape_meta = shape_meta['obs']
-    n_points = None
-    
-    for key, attr in obs_shape_meta.items():
-        type = attr.get('type', 'low_dim')
-        shape = tuple(attr.get('shape'))
-        
-        if type == 'pointcloud':
-            pointcloud_keys.append(key)
-            # pointcloud is (N_points, 6) shape
-            assert len(shape) == 2 and shape[1] == 6, f"PointCloud shape must be (N, 6), got {shape}"
-            n_points = shape[0]
-        elif type == 'low_dim':
-            lowdim_keys.append(key)
-            lowdim_shapes[key] = tuple(shape)
-            if 'pose' in key:
-                assert tuple(shape) in [(2,),(6,),(7,)]  # adding 7D support
-    
-    action_shape = tuple(shape_meta['action']['shape'])
-    assert action_shape in [(2,),(6,),(7,)]  # adding 7D support
-
-    # load data
-    with threadpool_limits(1):
-        replay_buffer = real_pointcloud_data_to_replay_buffer(
-            dataset_path=dataset_path,
-            out_store=store,
-            lowdim_keys=lowdim_keys + ['action'],
-            pointcloud_keys=pointcloud_keys,
-            n_points=n_points,
-            apply_preprocessing=apply_preprocessing,
-            use_cuda=use_cuda
-        )
-
-    # transform lowdim dimensions - 7D action
-    if action_shape == (2,):
-        # 2D action space, only controls X and Y
-        zarr_arr = replay_buffer['action']
-        zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
-    elif action_shape == (6,):
-        # 6D action space, 6DOF pose
-        zarr_arr = replay_buffer['action']
-        zarr_resize_index_last_dim(zarr_arr, idxs=[0,1,2,3,4,5])
-    # 7D (6DOF + gripper)
-    
-    for key, shape in lowdim_shapes.items():
-        if 'pose' in key:
-            if shape == (2,):
-                # only take X and Y
-                zarr_arr = replay_buffer[key]
-                zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
-            elif shape == (6,):
-                # 6DOF pose
-                zarr_arr = replay_buffer[key]
-                zarr_resize_index_last_dim(zarr_arr, idxs=[0,1,2,3,4,5])
-
-    return replay_buffer
