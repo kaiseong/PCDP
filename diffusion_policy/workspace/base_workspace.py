@@ -68,10 +68,31 @@ class BaseWorkspace:
             self._saving_thread.start()
         else:
             torch.save(payload, path.open('wb'), pickle_module=dill)
+        del payload
+        torch.cuda.empty_cache()
+        
         return str(path.absolute())
     
     def get_checkpoint_path(self, tag='latest'):
-        return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
+        if tag == 'latest':
+            return pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
+        elif tag == 'best':
+            # the checkpoints are saved as format: epoch={}-test_mean_score={}.ckpt
+            # find the best checkpoint
+            checkpoint_dir = pathlib.Path(self.output_dir).joinpath('checkpoints')
+            all_checkpoints = os.listidr(checkpoint_dir)
+            best_ckpt = None
+            best_score = -1e10
+            for ckpt in all_checkpoints:
+                if 'latest' in ckpt:
+                    continue
+                score = float(ckpt.split('test_mean_score=')[1].split('.ckpt')[0])
+                if score > best_score:
+                    best_ckpt=ckpt
+                    best_score=score
+            return pathlib.Path(self.output_dir).joinpath('checkpoints', best_ckpt)
+        else:
+            raise NotImplementedError(f"tag {tag} not implemented")
 
     def load_payload(self, payload, exclude_keys=None, include_keys=None, **kwargs):
         if exclude_keys is None:

@@ -11,6 +11,7 @@ import open3d as o3d
 from threadpoolctl import threadpool_limits
 from multiprocessing.managers import SharedMemoryManager
 import diffusion_policy.common.mono_time as mono_time
+from diffusion_policy.common.orbbec_util import frame_to_rgb_frame
 from termcolor import cprint
 
 # debug
@@ -48,7 +49,6 @@ class SingleOrbbec(mp.Process):
         
         
         # create ring buffer
-        resolution = tuple(rgb_resolution)
         examples = dict()
         
         if mode == "D2C":
@@ -65,13 +65,28 @@ class SingleOrbbec(mp.Process):
         examples['timestamp'] = 0.0
         examples['step_idx'] = 0
 
-        
-
         ring_buffer = SharedMemoryRingBuffer.create_from_examples(
             shm_manager=shm_manager,
             examples=examples,
             get_max_k=get_max_k,
-            get_time_budget=0.018,
+            get_time_budget=0.025,
+            put_desired_frequency=put_fps
+        )
+        
+        rgb_resolution=rgb_resolution[::-1]
+        examples_ = dict()
+        examples_['image'] = np.empty(
+            shape=(*rgb_resolution, 3), dtype=np.uint8)
+        examples_['camera_capture_timestamp'] = 0.0
+        examples_['camera_receive_timestamp'] = 0.0
+        examples_['timestamp'] = 0.0
+        examples_['step_idx'] = 0
+        
+        rgb_ring_buffer = SharedMemoryRingBuffer.create_from_examples(
+            shm_manager=shm_manager,
+            examples=examples_,
+            get_max_k=get_max_k,
+            get_time_budget=0.025,
             put_desired_frequency=put_fps
         )
 
@@ -83,7 +98,7 @@ class SingleOrbbec(mp.Process):
         intrinsics_array.get()[:] = 0
 
         # copied variables
-        self.resolution = resolution
+        self.resolution = rgb_resolution
         self.put_fps = put_fps
         self.put_downsample = put_downsample
         self.mode = mode
@@ -94,6 +109,7 @@ class SingleOrbbec(mp.Process):
         self.stop_event = mp.Event()
         self.ready_event = mp.Event()
         self.ring_buffer = ring_buffer
+        self.rgb_ring_buffer = rgb_ring_buffer
         self.intrinsics_array = intrinsics_array
 
     @staticmethod
@@ -158,6 +174,9 @@ class SingleOrbbec(mp.Process):
             return self.ring_buffer.get(out=out)
         else:
             return self.ring_buffer.get_last_k(k, out=out)
+    
+    def get_rgb(self, out=None):
+        return self.rgb_ring_buffer.get(out=out)
 
     def get_intrinsics(self):
         assert self.ready_event.is_set()
@@ -179,7 +198,7 @@ class SingleOrbbec(mp.Process):
         cfg = ob.Config()
 
         depth_res = (640, 576)
-        color_res = self.resolution
+        color_res = self.resolution[::-1]
         
         if self.mode=="D2C":
             align_to = ob.OBStreamType.COLOR_STREAM
@@ -240,11 +259,22 @@ class SingleOrbbec(mp.Process):
                 if depth is None or color is None:
                     continue
                 
+                # rgb_image shape is (720, 1280, 3)
+                # rgb_image = frame_to_rgb_frame(color)
+
+                if color:
+                    img_width = color.get_width()
+                    img_height = color.get_height()
+                    rgb_array = np.frombuffer(color.get_data(), dtype=np.uint8).reshape((*self.resolution, 3))
+                else:
+                    rgb_array = np.zeros((*self.resolution, 3), dtype=np.uint8)
+                
                 receive_time = mono_time.now_s()
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
                 depth_time = depth.get_timestamp()
+                rgb_time = color.get_timestamp()
                 if (depth_time - pre_time) > 35:
                     anormaly_cnt+=1
                 pre_time=depth_time
@@ -263,11 +293,17 @@ class SingleOrbbec(mp.Process):
                 data = dict()
                 data['camera_receive_timestamp'] = receive_time
                 data['camera_capture_timestamp'] = depth_time
-                
                 data['pointcloud']=points_data
 
+                data_ = dict()
+                data_['camera_receive_timestamp'] = receive_time
+                data_['camera_capture_timestamp'] = rgb_time
+                data_['image'] = rgb_array
+
+
                 put_data = data
-                
+                put_data_ = data_
+
                 if self.put_downsample:
                     local_idxs, global_idxs, put_idx = get_accumulate_timestamp_idxs(
                         timestamps=[receive_time],
@@ -289,8 +325,11 @@ class SingleOrbbec(mp.Process):
                     step_idx = int((receive_time - put_start_time) * self.put_fps)
                     put_data['step_idx'] = step_idx
                     put_data['timestamp'] = receive_time
+                    put_data_['step_idx'] = step_idx
+                    put_data_['timestamp'] = receive_time
                     try:
                         self.ring_buffer.put(put_data, wait=False)
+                        self.rgb_ring_buffer.put(put_data_, wait=False)
                     except TimeoutError:
                             if self.verbose:
                                 cprint("[SingleOrbbec] Ring buffer full, dropping frame.", "green", attrs=["bold"])

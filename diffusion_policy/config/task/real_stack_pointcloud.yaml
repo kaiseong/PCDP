@@ -1,8 +1,9 @@
 # real_stack_pointcloud.yaml
 name: real_stack_pointcloud
 
-pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: cc/recorder_data
+# 368640
+pointcloud_shape: [8192, 6]  # max_points, XYZRGB
+dataset_path: bb/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -19,11 +20,15 @@ shape_meta: &shape_meta
     robot_gripper:
       shape: [3]
       type: low_dim
-    align_timestamp:
-      shape: [1]
-      type: low_dim
+    # align_timestamp:
+    #   shape: [1]
+    #   type: low_dim
   action: 
     shape: [6]  # 6DOF + gripper
+
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_stack_pointcloud_runner.RealStackPointCloudRunner
 
 dataset:
   _target_: diffusion_policy.dataset.real_stack_pc_dataset.RealStackPointCloudDataset
@@ -40,12 +45,12 @@ dataset:
   max_train_episodes: null
   
 
-  enable_preprocessing: False
+  enable_preprocessing: True
   preprocessor_config:
-    target_num_points: 1024
-    enable_transform: False
+    target_num_points: 8192
+    enable_transform: True
     enable_cropping: False
-    enable_sampling: False
+    enable_sampling: True
     use_cuda: True
     verbose: False
     # Camera to robot transformation matrix (4x4)

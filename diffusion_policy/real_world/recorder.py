@@ -12,13 +12,13 @@ import numcodecs
 from collections import deque
 import shutil
 import queue
-
 from diffusion_policy.common.timestamp_accumulator import align_timestamps
 from diffusion_policy.shared_memory.shared_ndarray import SharedNDArray
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from diffusion_policy.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
 from diffusion_policy.real_world.single_orbbec import SingleOrbbec
 from diffusion_policy.real_world.piper_interpolation_controller import PiperInterpolationController
+from diffusion_policy.real_world.video_recorder import VideoRecorder
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 import diffusion_policy.common.mono_time as mono_time
 from termcolor import cprint
@@ -143,6 +143,8 @@ class EpisodeStreamer:
                     clevel=self.compression_level, 
                     shuffle=numcodecs.Blosc.BITSHUFFLE
                 )
+
+                print(f"chunk: {chunks}")
                 
                 
                 arrays[key] = zarr_group.zeros(
@@ -206,7 +208,9 @@ class Recorder(mp.Process):
         compression_level: int = 3,
         frequency: float = 100.0,  # 10ms polling
         max_buffer_size: int = 30,
-        save_batch_size: int = 1
+        save_batch_size: int = 1,
+        record_rgb: bool = True,
+        rgb_fps: int = 30
     ):
         super().__init__(name="Recorder")
         
@@ -269,6 +273,18 @@ class Recorder(mp.Process):
             examples=action_example,
             buffer_size=256
         )
+
+        # rgb recorder
+        self.video_recorder: Optional[VideoRecorder] = None
+        if record_rgb:
+            rgb_queue = self.orbbec.rgb_ring_buffer
+            if rgb_queue is None:
+                raise ValueError("SingleOrbbec's rgb_ring_buffer is None.")
+            self.video_recorder = VideoRecorder(
+                shm_manager=shm_manager,
+                rgb_queue=rgb_queue,
+                fps=rgb_fps
+            )
     
     def _get_latest_episode_id(self):
         if not self.output_dir.exists():
@@ -335,6 +351,8 @@ class Recorder(mp.Process):
     
     def start(self, wait=True):
         super().start()
+        if self.video_recorder:
+            self.video_recorder.start()
         if wait:
             self.start_wait()
     
@@ -349,6 +367,8 @@ class Recorder(mp.Process):
 
     def stop_process(self):
         self.stop_event.set()
+        if self.video_recorder:
+            self.video_recorder.stop()
 
     def _read_orbbec_data(self) -> bool: 
         try:
@@ -410,15 +430,19 @@ class Recorder(mp.Process):
         MAX_BATCH = 3
 
         
-        orbbec_data_list =[]
+        orbbec_data_list = []
         while processed < MAX_BATCH:
             try:
                 orbbec_data = self.orbbec_buffer.popleft()
+                if orbbec_data['timestamp'] >= self.start_time:
+                    orbbec_data_list.append(orbbec_data)
+                    processed += 1
+                elif not self.recording:
+                    processed += 1
+                else:
+                    processed += 1
             except IndexError:
                 break
-            if orbbec_data['timestamp'] >= self.start_time:
-                orbbec_data_list.append(orbbec_data)
-                processed += 1
         
         if not orbbec_data_list:
             return
@@ -444,6 +468,11 @@ class Recorder(mp.Process):
                     }
                     
                     self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
+                else:
+                    cprint(f"[Recorder]] Warning: Robot data index {robot_idx} out of bounds\
+                            for robot_bufer (len {len(self.robot_buffer)}). Skipping obs", "red", attrs=["bold"])
+            else:
+                cprint(f"[Recorder] Warning: No corresponding robot data index found for orbbec_data {i}", "red", attrs=["bold"])
 
     def _process_action_queue(self):
         try:
@@ -458,6 +487,9 @@ class Recorder(mp.Process):
                     self.writer_queue.put_nowait({'type':'action', 'data': action_data})
         except Empty:
             pass
+        except Exception as e:
+            cprint(f"[Recorder] Error processing actions: {e}", "cyan", attrs=["bold"])
+
     
     def _process_commands(self):
         """Process recording commands"""
@@ -472,8 +504,8 @@ class Recorder(mp.Process):
                     if not self.recording:
                         
                         self.start_time = commands['start_time'][i]
-                        self.episode_id = self.episode_counter
-                        self.episode_counter += 1
+                        self.episode_id = commands['episode_id'][i]
+                        self.episode_counter = self.episode_id + 1
 
                         # new episode_stemaer create
                         episode_dir = self.get_episode_dir(self.episode_id)
@@ -485,6 +517,15 @@ class Recorder(mp.Process):
 
                         self.recording = True
                         self.recording_event.set()
+
+                        if self.video_recorder:
+                            video_dir = self.output_dir.parent / 'videos'
+                            video_episode_dir = video_dir / f'{self.episode_id:04d}'
+                            video_episode_dir.mkdir(parents=True, exist_ok=True)
+                            video_path = video_episode_dir / '0.mp4'
+
+                            self.video_recorder.start_episode_recording(str(video_path), self.start_time)
+                        
                         
                         self.orbbec_buffer.clear()
                         self.robot_buffer.clear()
@@ -504,28 +545,43 @@ class Recorder(mp.Process):
 
                         self.recording = False
                         self.recording_event.clear()
+                        if self.video_recorder:
+                            self.video_recorder.stop_episode_recording()
                         cprint(f"[Recorder] saved episode {self.episode_id}.", "cyan", attrs=["bold"])
                 
                 elif cmd == RecorderCommand.DROP:
-                    if self.episode_streamer:
+                    if self.recording and self.episode_streamer:
+                        self._process_new_data()
+                        self.writer_queue.put({'type': "FLUSH"})
+                        self.writer_queue.join()
                         self.episode_streamer = None
+                        self.recording = False
+                        self.recording_event.clear()
+                        if self.video_recorder:
+                            self.video_recorder.stop_episode_recording()
                     
-                    self.recording = False
-                    self.recording_event.clear()
 
                     if self.episode_counter > 0:
-                        latest_episode_id = self.episode_counter -1
-                        latest_episode_dir = self.get_episode_dir(latest_episode_id)
-                        if latest_episode_dir.exists():
-                            shutil.rmtree(latest_episode_dir)
-                            cprint(f"[Recorder] Dropped episode {latest_episode_id}",
-                                    "cyan", attrs=["bold"])
-                        self.episode_counter = latest_episode_id
+                        drop_episode_id = self.episode_counter -1
+                        if self.episode_id is not None and self.episode_id == drop_episode_id:
+                            self.episode_id = None
+                        episode_dir = self.get_episode_dir(drop_episode_id)
+                        video_dir = self.output_dir.parent / 'videos' / f'{drop_episode_id:04d}'
+                        
+                        if episode_dir.exists():
+                            shutil.rmtree(episode_dir)
+                            cprint(f"[Recorder] Dropped episode data: {episode_dir}", "cyan", attrs=["bold"])
+                        if video_dir.exists():
+                            shutil.rmtree(video_dir)
+                            cprint(f"[Recorder] Dropped episode video: {video_dir}", "cyan", attrs=["bold"])
+                        self.episode_counter = drop_episode_id
                         
         except Empty:
             pass
         except Exception as e:
             cprint(f"[Recorder] Error processing commands: {e}", "cyan")
+            import traceback
+            traceback.print_exc()
     
     def _writer_loop(self):
         buffer = []
@@ -613,7 +669,7 @@ class Recorder(mp.Process):
     
     @property
     def n_episodes(self):
-        return self.episode_counter
+        return self._get_latest_episode_id()
     
 
     def get_episode_list(self):
@@ -621,5 +677,10 @@ class Recorder(mp.Process):
         if self.output_dir.exists():
             for item in sorted(self.output_dir.iterdir()):
                 if item.is_dir() and item.name.startswith('episode'):
-                    episodes.append(item.name)
+                    ep_id_str = item.name.split('episode_')[-1]
+                    try:
+                        episodes.append(int(ep_id_str))
+                    except ValueError:
+                        continue
+        episodes.sort()
         return episodes

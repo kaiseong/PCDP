@@ -282,13 +282,16 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             del data[key]
         
         action = data['action'].astype(np.float32)
+        action_timestamp = data['timestamp'].astype(np.float32)
         # handle latency by dropping first n_latency_steps action
         # observations are already taken care of by T_slice
         if self.n_latency_steps > 0:
             action = action[self.n_latency_steps:]
+            action_timestamp = action_timestamp[self.n_latency_steps:]
 
         torch_data = {
             'obs': dict_apply(obs_dict, torch.from_numpy),
-            'action': torch.from_numpy(action)
+            'action': torch.from_numpy(action),
+            'action_time': torch.from_numpy(action_timestamp)
         }
         return torch_data
