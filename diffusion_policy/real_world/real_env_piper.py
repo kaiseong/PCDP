@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 import pathlib
 import numpy as np
 import time
@@ -33,7 +33,12 @@ DEFAULT_OBS_KEY_MAP = {
 class RealEnv:
     def __init__(self, 
             # required params
-            output_dir,
+            output_dir: str,
+            # IK params
+            urdf_path: str,
+            mesh_dir: str,
+            ee_link_name: str,
+            joints_to_lock_names: List[str],
             # env params
             frequency=10,
             n_obs_steps=2,
@@ -75,12 +80,18 @@ class RealEnv:
         )
 
         cube_diag = np.linalg.norm([1,1,1])
-        j_init = np.array([0.142506, 0.580776, -1.23754, 0.116763, 0.6878, 0.0]) 
+        j_init = np.array([0.0, 0.5, -1.0, 0.0, 1.0, 0.0]) 
         if not init_joints:
             j_init = None
 
         robot = PiperInterpolationController(
             shm_manager=shm_manager,
+            # IK parameters
+            urdf_path=urdf_path,
+            mesh_dir=mesh_dir,
+            ee_link_name=ee_link_name,
+            joints_to_lock_names=joints_to_lock_names,
+            # Controller parameters
             frequency=200, # Piper frequency
             lookahead_time=0.1,
             gain=300,

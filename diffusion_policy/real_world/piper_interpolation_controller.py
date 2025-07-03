@@ -7,13 +7,15 @@ from multiprocessing.managers import SharedMemoryManager
 import scipy.interpolate as si
 import scipy.spatial.transform as st
 import numpy as np
-from typing import (Optional,)
+from typing import (Optional, List)
+import pinocchio as pin
 from piper_sdk import *
 from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import diffusion_policy.common.mono_time as mono_time
+from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
 from termcolor import cprint
 
 
@@ -32,6 +34,12 @@ class PiperInterpolationController(mp.Process):
     
     def __init__(self,
             shm_manager: SharedMemoryManager,
+            # IK parameters
+            urdf_path: str,
+            mesh_dir: str,
+            ee_link_name: str,
+            joints_to_lock_names: List[str],
+            # Controller parameters
             frequency = 200,
             lookahead_time=0.1,
             gain = 300,
@@ -68,6 +76,15 @@ class PiperInterpolationController(mp.Process):
             assert joints_init.shape == (6,)
 
         super().__init__(name="PiperInterpolationController")
+        
+        # IK Controller
+        self.ik_controller = PinocchioIKController(
+            urdf_path=urdf_path,
+            mesh_dir=mesh_dir,
+            ee_link_name=ee_link_name,
+            joints_to_lock_names=joints_to_lock_names
+        )
+        
         self.frequency = frequency
         self.lookahead_time = lookahead_time
         self.gain = gain
@@ -159,12 +176,9 @@ class PiperInterpolationController(mp.Process):
         v[3:] = np.deg2rad(v[3:])
         return v
 
-    def _vec_to_sdk_pose(self, vec):
-        # vec is [m] and [rad]
-        pose_int = np.empty(6, dtype=int)
-        pose_int[:3] = np.round(vec[:3] * 1e6).astype(int)
-        pose_int[3:] = np.round(np.rad2deg(vec[3:]) * 1e3).astype(int)
-        return pose_int.tolist()
+    def _rad_to_sdk_joint(self, rad: np.ndarray) -> List[int]:
+        """Converts joint angles in radians to the integer format for Piper SDK."""
+        return (np.rad2deg(rad) * 1e3).astype(int).tolist()
 
     # =========== context method ============
     def __enter__(self):
@@ -212,6 +226,7 @@ class PiperInterpolationController(mp.Process):
 
     # =========== main loop in process ============
     def run(self):
+        durations = np.array([], dtype=np.float32)
         # enable soft real-time
         if self.soft_real_time:
             os.sched_setscheduler(0, os.SCHED_RR, os.sched_param(20))
@@ -271,39 +286,66 @@ class PiperInterpolationController(mp.Process):
             # init pose
             if self.joints_init is not None:
                 piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-                tgt = (np.rad2deg(self.joints_init)*1e3).astype(int)
-                piper.JointCtrl(tgt)
+                piper.JointCtrl(self._rad_to_sdk_joint(self.joints_init))
             
             # main loop
             dt = 1. / self.frequency
+            
+            # Read current state
+            curr_joints = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
             curr_pose = self._sdk_pose_to_vec(piper.GetArmEndPoseMsgs())
+            
             curr_t = time.monotonic()
             last_waypoint_time = curr_t
+            
+            # Initialize interpolator with current EEF pose
             pose_interp = PoseTrajectoryInterpolator(
                 times=[curr_t],
                 poses=[curr_pose]
             )
+            
+            # Initialize last known joint angles for IK
+            last_q = curr_joints
 
             iter_idx = 0
             keep_running=True
             cprint(f"[Piper_Controller] Main loop started.", "magenta", attrs=["bold"])
             
+            debug_first = False
+            
             while keep_running:
+                
+                debug_t_start = mono_time.now_ms()
+
                 # start control iteration
                 loop_start=time.perf_counter()
 
                 # send command to robot
                 t_now = time.monotonic()
-                # diff = t_now - pose_interp.times[-1]
-                # if diff > 0:
-                #     print('extrapolate', diff)
-                pose_command = pose_interp(t_now) 
-                target_pose_vec = pose_command.copy()
-                vel = max(1, int(self.max_rot_speed / 1.57 * 100))
-                piper.MotionCtrl_2(0x01, 0x00, vel, 0x00)
-                piper.EndPoseCtrl(self._vec_to_sdk_pose(pose_command))
-                # print(f"command: {self._vec_to_sdk_pose(pose_command)}")
                 
+                # 1. Get target EEF pose from interpolator
+                target_pose_vec = pose_interp(t_now)
+                
+                # 2. Convert to pin.SE3 for IK
+                pos = target_pose_vec[:3]
+                rot_vec = target_pose_vec[3:]
+                rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
+                target_se3 = pin.SE3(rot, pos)
+                
+                # 3. Calculate IK
+                target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
+                
+                # 4. Send command to robot
+                if target_joints is not None:
+                    piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
+                    piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
+                    last_q = target_joints # Update last known good joint angles
+                else:
+                    # IK failed, what to do? For now, print a warning.
+                    # In a real scenario, might want to stop the robot.
+                    if self.verbose:
+                        cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
+
                 # update robot state
                 state = dict()
                 for k in self.receive_keys:
@@ -315,7 +357,11 @@ class PiperInterpolationController(mp.Process):
                     else:
                         state[k] = np.asarray(raw)
                 
-                state["ArmJointMsgs"] = np.deg2rad(state["ArmJointMsgs"])
+                # Update current joint angles for next IK `q_init`
+                current_joints_rad = np.deg2rad(state["ArmJointMsgs"])
+                last_q = current_joints_rad
+                
+                state["ArmJointMsgs"] = current_joints_rad
                 state["TargetEndPose"] = target_pose_vec
                 state["robot_receive_timestamp"] = mono_time.now_s()
                 self.ring_buffer.put(state)
@@ -339,10 +385,6 @@ class PiperInterpolationController(mp.Process):
                         keep_running = False
                         break
                     elif cmd == Command.SERVOL.value:
-                        # since curr_pose always lag behind curr_target_pose
-                        # if we start the next interpolation with curr_pose
-                        # the command robot receive will have discontinouity 
-                        # and cause jittery robot behavior.
                         target_pose = command['target_pose']
                         duration = float(command['duration'])
                         curr_time = t_now + dt
@@ -355,10 +397,6 @@ class PiperInterpolationController(mp.Process):
                             max_rot_speed=self.max_rot_speed
                         )
                         last_waypoint_time=t_insert
-                        if self.verbose:
-                            if iter_idx % 100==0:
-                                cprint(f"[Piper_Controller] New pose target: {target_pose} duration: {duration}s",
-                                        "magenta", attrs=["bold"])
                     elif cmd == Command.SCHEDULE_WAYPOINT.value:
                         target_pose = command['target_pose']
                         target_time = float(command['target_time'])
@@ -379,22 +417,25 @@ class PiperInterpolationController(mp.Process):
                     self.ready_event.set()
                 iter_idx += 1
 
-                if self.verbose:
-                    cprint(f"[Piper_Controller] Actual frequency {1/(time.perf_counter() - loop_start)}",
-                            "magenta", attrs=["bold"])
                 spent = time.perf_counter() - loop_start
                 if spent < dt:
                     time.sleep(dt - spent)
+                
+                if debug_first:
+                    durations = np.append(durations, mono_time.now_ms()-debug_t_start)
+                debug_first = True
         
         finally:
+            print(f"Piper Controller\n\
+                    duration mean: {durations.mean()}\n\
+                    max: {durations.max()}\n\
+                    min: {durations.min()}")
             # manditory cleanup
-            # decelerate
             piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-            piper.JointCtrl([0, 100, 0, 0, 0, 0])
+            piper.JointCtrl([0, 0, 0, 0, 0, 0])
             time.sleep(5)
             piper.DisableArm(7)
             time.sleep(1)
-
             piper.DisconnectPort()
             self.ready_event.set()
 

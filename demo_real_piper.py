@@ -40,11 +40,23 @@ from diffusion_policy.real_world.keystroke_counter import (
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
 def main(output, vis_camera_idx, init_joints, frequency, command_latency):
     dt = 1/frequency
+    
+    # IK parameters
+    urdf_path = "/home/nscl/diffusion_policy/debug/piper_no_gripper_description.urdf"
+    mesh_dir = "/home/nscl/diffusion_policy"
+    ee_link_name = "link6"
+    joints_to_lock_names = [] # No joints to lock in the no-gripper URDF
+
     with SharedMemoryManager() as shm_manager:
         with KeystrokeCounter() as key_counter, \
             JoypadSpacemouse(shm_manager=shm_manager) as sm, \
             RealEnv(
                 output_dir=output, 
+                # IK params
+                urdf_path=urdf_path,
+                mesh_dir=mesh_dir,
+                ee_link_name=ee_link_name,
+                joints_to_lock_names=joints_to_lock_names,
                 # recording resolution
                 frequency=frequency,
                 init_joints=init_joints,
@@ -55,7 +67,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             
 
             # 간단히 "5초 이내"로 기다리면서 도달 여부 검사
-            base_pose = [0.03751, 0.012182, 0.493991, 0.96503, 1.4663, 1.18428]
+            base_pose = [0.055, 0.0, 0.2034, 0.0, 1.4845, 0.0]
             plan_time = mono_time.now_s() + 2.0
             env.exec_actions([base_pose], [plan_time])
             print("Moving to the base_pose, please wait...")
@@ -179,7 +191,6 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 target_pose[:3] += dpos
                 target_pose[3:] = (drot * st.Rotation.from_rotvec(
                     target_pose[3:])).as_rotvec()
-                # print(f"target_pose: {target_pose}")
 
                 # execute teleop command
                 env.exec_actions(
