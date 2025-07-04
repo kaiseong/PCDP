@@ -323,30 +323,7 @@ class PiperInterpolationController(mp.Process):
                 # send command to robot
                 t_now = time.monotonic()
                 
-                # 1. Get target EEF pose from interpolator
-                target_pose_vec = pose_interp(t_now)
-                
-                # 2. Convert to pin.SE3 for IK
-                pos = target_pose_vec[:3]
-                rot_vec = target_pose_vec[3:]
-                rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
-                target_se3 = pin.SE3(rot, pos)
-                
-                # 3. Calculate IK
-                target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
-                
-                # 4. Send command to robot
-                if target_joints is not None:
-                    piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
-                    piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
-                    last_q = target_joints # Update last known good joint angles
-                else:
-                    # IK failed, what to do? For now, print a warning.
-                    # In a real scenario, might want to stop the robot.
-                    if self.verbose:
-                        cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
-
-                # update robot state
+                # 1. Get current robot state
                 state = dict()
                 for k in self.receive_keys:
                     if k == 'TargetEndPose':
@@ -357,10 +334,33 @@ class PiperInterpolationController(mp.Process):
                     else:
                         state[k] = np.asarray(raw)
                 
-                # Update current joint angles for next IK `q_init`
                 current_joints_rad = np.deg2rad(state["ArmJointMsgs"])
                 last_q = current_joints_rad
+
+                # 2. Get target EEF pose from interpolator
+                target_pose_vec = pose_interp(t_now)
                 
+                # 3. Convert to pin.SE3 for IK
+                pos = target_pose_vec[:3]
+                rot_vec = target_pose_vec[3:]
+                rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
+                target_se3 = pin.SE3(rot, pos)
+                
+                # 4. Calculate IK using the most recent joint state
+                target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
+                
+                # 5. Send command to robot
+                if target_joints is not None:
+                    piper.MotionCtrl_2(0x01, 0x01, 50, 0x00) # Using a moderate speed
+                    piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
+                    last_q = target_joints # Update last known good joint angles for the next iteration's initial guess
+                else:
+                    # IK failed, what to do? For now, print a warning.
+                    # In a real scenario, might want to stop the robot.
+                    if self.verbose:
+                        cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
+
+                # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad
                 state["TargetEndPose"] = target_pose_vec
                 state["robot_receive_timestamp"] = mono_time.now_s()

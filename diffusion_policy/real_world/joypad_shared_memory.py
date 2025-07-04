@@ -61,12 +61,6 @@ class JoypadSpacemouse(mp.Process):
         self.ready_event = mp.Event()
         self.stop_event = mp.Event()
 
-        # 좌표계 변환 행렬(스페이스마우스 코드와 동일)
-        self.tx_zup_spnav = np.array([
-            [0,0,-1],
-            [1,0,0],
-            [0,1,0]
-        ], dtype=dtype)
 
     def get_motion_state(self):
         state = self.ring_buffer.get()
@@ -88,10 +82,7 @@ class JoypadSpacemouse(mp.Process):
         back
         """
         raw = self.get_motion_state()
-        tf_state = np.zeros_like(raw)
-        tf_state[:3] = self.tx_zup_spnav @ raw[:3]
-        tf_state[3:] = self.tx_zup_spnav @ raw[3:]
-        return tf_state
+        return raw
 
     def get_button_state(self):
         return self.ring_buffer.get()['button_state']
@@ -164,15 +155,20 @@ class JoypadSpacemouse(mp.Process):
                     if axis == 0:  # 왼쪽 스틱 좌우
                         motion_event[0] = int(-val * self.max_value/4)  # Tx
                     elif axis == 1:  # 왼쪽 스틱 상하
-                        motion_event[2] = int(val * self.max_value/4)  # Ty (반전)
+                        motion_event[1] = int(val * self.max_value/4)  # Ty (반전)
                     elif axis == 2:  # 오른쪽 스틱 좌우
                         motion_event[0] = int(-val * self.max_value)  # Tx
                     elif axis == 3:  # 오른쪽 스틱 상하
-                        motion_event[2] = int(val * self.max_value)  # Ty (반전)
+                        motion_event[1] = int(-val * self.max_value)  # Ty (반전)
                 
                 elif event.type == pygame.JOYBUTTONDOWN:
                     # 버튼 매핑 - demo_real_robot.py에서 사용하는 좌/우 버튼 기능
                     # 사용 중인 조이스틱에 맞게 조정 필요할 수 있음
+                    if event.button == 3:
+                        motion_event[2] = int(0.5 * self.max_value)
+                    if event.button == 1:
+                        motion_event[2] = int(-0.5 * self.max_value)
+                        
                     if event.button < self.n_buttons:
                         button_state[event.button] = True
                 

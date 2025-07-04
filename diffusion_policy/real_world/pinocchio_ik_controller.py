@@ -28,7 +28,7 @@ class PinocchioIKController:
         self._initialize_model(urdf_path, mesh_dir, joints_to_lock_names)
 
         # IK 계산을 위한 파라미터
-        self.DAMPING = 1e-4
+        self.DAMPING = 1e-2
         self.MAX_ITERATIONS = 100
         self.TOLERANCE = 1e-4
 

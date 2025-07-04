@@ -101,7 +101,7 @@ class RealEnv:
             payload_mass=None,
             joints_init=j_init,
             soft_real_time=False,
-            debug=False,
+            debug=True,
             receive_keys=None,
             get_max_k=max_obs_buffer_size
             )

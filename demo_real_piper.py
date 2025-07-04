@@ -67,7 +67,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             
 
             # 간단히 "5초 이내"로 기다리면서 도달 여부 검사
-            base_pose = [0.055, 0.0, 0.2034, 0.0, 1.4845, 0.0]
+            base_pose = [0.03751, 0.012182, 0.493991, 0.96503, 1.4663, 1.18428]
             plan_time = mono_time.now_s() + 2.0
             env.exec_actions([base_pose], [plan_time])
             print("Moving to the base_pose, please wait...")
