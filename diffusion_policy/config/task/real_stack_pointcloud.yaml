@@ -2,8 +2,8 @@
 name: real_stack_pointcloud
 
 # 368640
-pointcloud_shape: [8192, 6]  # max_points, XYZRGB
-dataset_path: bb/recorder_data
+pointcloud_shape: [368640, 6]  # max_points, XYZRGB
+dataset_path: aa/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -20,9 +20,9 @@ shape_meta: &shape_meta
     robot_gripper:
       shape: [3]
       type: low_dim
-    # align_timestamp:
-    #   shape: [1]
-    #   type: low_dim
+    align_timestamp:
+      shape: [1]
+      type: low_dim
   action: 
     shape: [6]  # 6DOF + gripper
 
@@ -45,9 +45,9 @@ dataset:
   max_train_episodes: null
   
 
-  enable_preprocessing: True
+  enable_preprocessing: False
   preprocessor_config:
-    target_num_points: 8192
+    target_num_points: 1024
     enable_transform: True
     enable_cropping: False
     enable_sampling: True

@@ -42,8 +42,8 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
     dt = 1/frequency
     
     # IK parameters
-    urdf_path = "/home/nscl/diffusion_policy/debug/piper_no_gripper_description.urdf"
-    mesh_dir = "/home/nscl/diffusion_policy"
+    urdf_path = "/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf"
+    mesh_dir = "/home/moai/diffusion_policy"
     ee_link_name = "link6"
     joints_to_lock_names = [] # No joints to lock in the no-gripper URDF
 
@@ -65,7 +65,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             ) as env:
             cv2.setNumThreads(1)
             
-
+            
             # 간단히 "5초 이내"로 기다리면서 도달 여부 검사
             base_pose = [0.03751, 0.012182, 0.493991, 0.96503, 1.4663, 1.18428]
             plan_time = mono_time.now_s() + 2.0

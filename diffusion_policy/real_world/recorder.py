@@ -143,8 +143,6 @@ class EpisodeStreamer:
                     clevel=self.compression_level, 
                     shuffle=numcodecs.Blosc.BITSHUFFLE
                 )
-
-                print(f"chunk: {chunks}")
                 
                 
                 arrays[key] = zarr_group.zeros(

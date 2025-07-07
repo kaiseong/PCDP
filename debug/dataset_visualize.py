@@ -69,6 +69,7 @@ def main():
     vis.create_window("Dataset inspector", 1280, 720, visible=True)
     opt = vis.get_render_option()
     opt.point_size = 1.0
+    opt.background_color = np.array([0.0, 0.0, 0.0])
     pcd = o3d.geometry.PointCloud()
     
     first_loaded = False
@@ -84,23 +85,23 @@ def main():
 
             pts = batch['obs']['pointcloud'][sample_idx, -1].numpy()
 
-            
+            pts = pts[pts[:, 2] > 0.0] 
             act = batch['action'][sample_idx].numpy()
 
             xyz, rgb = pts[:, :3], pts[:, 3:]
             if rgb.max() > 1.0:
                 rgb = rgb / 255.0
             
-            pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float32))
-            pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float32))
+            # pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float32))
+            # pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float32))
 
-            # points_xyz = np.asarray(xyz, dtype=np.float32)
-            # points_xyz, sample_indices = farthest_point_sampling(points_xyz, 1024*64, True)
-            # sample_indices = sample_indices.cpu().numpy().flatten()
+            points_xyz = np.asarray(xyz, dtype=np.float32)
+            points_xyz, sample_indices = farthest_point_sampling(points_xyz, 1024, True)
+            sample_indices = sample_indices.cpu().numpy().flatten()
             
-            # points_rgb = rgb[sample_indices]
-            # pcd.points = o3d.utility.Vector3dVector(points_xyz.astype(np.float32))
-            # pcd.colors = o3d.utility.Vector3dVector(points_rgb.astype(np.float32))
+            points_rgb = rgb[sample_indices]
+            pcd.points = o3d.utility.Vector3dVector(points_xyz.astype(np.float32))
+            pcd.colors = o3d.utility.Vector3dVector(points_rgb.astype(np.float32))
             
             if not first_loaded:
                 vis.add_geometry(pcd, reset_bounding_box=True)

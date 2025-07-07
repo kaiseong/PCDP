@@ -194,7 +194,7 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
             
 
 # 사용 예시
-analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/aa/recorder_data")
+analyzer = EpisodeAnalyzer("/home/moai/diffusion_policy/aa/recorder_data")
 # summary = analyzer.get_episode_summary()
 # print(f"총 에피소드 수: {summary['total_episodes']}")
 # for detail in summary['episode_details']:

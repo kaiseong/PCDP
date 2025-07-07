@@ -74,6 +74,9 @@ class PiperInterpolationController(mp.Process):
         if joints_init is not None:
             joints_init = np.array(joints_init)
             assert joints_init.shape == (6,)
+        else:
+            joints_init = np.array(np.zeros(6,))
+            
 
         super().__init__(name="PiperInterpolationController")
         

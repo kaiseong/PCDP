@@ -167,7 +167,7 @@ if __name__ == '__main__':
     factor = 57295.7795
     
     # 1. URDF 파일 경로 설정
-    URDF_FILE = "/home/nscl/diffusion_policy/debug/piper_description.urdf" 
+    URDF_FILE = "/home/moai/diffusion_policy/debug/piper_description.urdf" 
 
     
 
@@ -204,22 +204,3 @@ if __name__ == '__main__':
                           pause=0.01,
                           speed_pct=50)      # MOVE J 속도 15 %
     print("궤적 완료")
-
-    """
-    # 3. (선택) 초기 관절 각도 설정 (현재 로봇의 자세 등)
-    # 로봇이 특정 자세에 가까운 해를 찾도록 유도할 수 있습니다.
-    q_initial = np.radians([0, 0, 0, 0, 0, 0]) # 예시 초기 각도 (6개)
-
-    # 4. IK 함수 호출하여 관절 값 받기
-    print("IK 솔루션 계산 중...")
-    joint_values_rad = get_ik_solution(URDF_FILE, target_pos, target_ori, initial_q=q_initial)
-    # print(joint_values_rad)
-    
-    while True:
-        if joint_values_rad is not None:
-            joint_values_deg = np.degrees(joint_values_rad)
-            print(f"joint: {(joint_values_deg*1000).astype(int)}")
-            piper.MotionCtrl_2(0x01, 0x01, 10, 0x00)
-            piper.JointCtrl((joint_values_deg*1000).astype(int))
-            time.sleep(0.005)
-    """

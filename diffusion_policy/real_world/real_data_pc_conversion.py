@@ -95,6 +95,7 @@ class PointCloudPreprocessor:
         Returns:
             processed_points: numpy array of processed pointcloud
         """
+        import diffusion_policy.common.mono_time as mono_time
         if len(points) == 0:
             return np.zeros((self.target_num_points, 6), dtype=np.float32)
             
@@ -102,17 +103,20 @@ class PointCloudPreprocessor:
         points = points.astype(np.float32)
         
         # Coordinate transformation
+        t1 = mono_time.now_ms()
         if self.enable_transform:
             points = self._apply_transform(points)
-            
+        print(f"TF time: {mono_time.now_ms() - t1}")
         # Workspace cropping
+        t2 = mono_time.now_ms()
         if self.enable_cropping:
             points = self._crop_workspace(points)
-            
+        print(f"crop time: {mono_time.now_ms()-t2}")
         # Point FPS sampling
+        t3 = mono_time.now_ms()
         if self.enable_sampling:
             points = self._sample_points(points)
-            
+        print(f"FPS time: {mono_time.now_ms() - t3}")
         return points
         
     def _apply_transform(self, points):
@@ -165,11 +169,9 @@ class PointCloudPreprocessor:
             padded_points[:len(points)] = points
             return padded_points
             
-        # Extract XYZ for sampling
-        points_xyz = points[:, :3]
-        
         try:
             # Use farthest point sampling
+            points_xyz = points[:, :3]
             sampled_xyz, sample_indices = self._farthest_point_sampling(
                 points_xyz, self.target_num_points)
                 

@@ -83,20 +83,26 @@ class PinocchioIKController:
             pin.updateFramePlacements(self.model, self.data)
             
             current_pose = self.data.oMf[self.ee_frame_id]
-            error_vec = pin.log6(target_pose.actInv(current_pose)).vector
+            # Note: error is computed in the frame of the target pose
+            error_vec = pin.log6(current_pose.inverse() * target_pose).vector
             
             if np.linalg.norm(error_vec) < self.TOLERANCE:
-                # 성공! 반환하기 전에 관절 한계치를 적용합니다.
-                q_clamped = np.clip(q, self.model.lowerPositionLimit, self.model.upperPositionLimit)
-                return q_clamped
+                # Solution found, now check joint limits
+                is_within_limits = np.all(q >= self.model.lowerPositionLimit) and np.all(q <= self.model.upperPositionLimit)
+                if is_within_limits:
+                    return q  # Success!
+                else:
+                    # Converged to a solution that violates joint limits
+                    return None
 
             J = pin.computeFrameJacobian(self.model, self.data, q, self.ee_frame_id, pin.ReferenceFrame.LOCAL)
             
             # Damped Least Squares
-            A = J.T @ J + self.DAMPING * np.eye(J.shape[1])
+            # A*dq = b --> (J.T*J + D*I) dq = J.T * error
+            A = J.T @ J + self.DAMPING * np.eye(self.model.nv)
             b = J.T @ error_vec
             delta_q = np.linalg.solve(A, b)
             
-            q = pin.integrate(self.model, q, -delta_q)
+            q = pin.integrate(self.model, q, delta_q)
             
-        return None # 수렴 실패
+        return None # Convergence failed

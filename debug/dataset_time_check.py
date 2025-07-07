@@ -25,7 +25,7 @@ CONFIG_DIR  = "../diffusion_policy/config"    # your yaml folder
 CONFIG_NAME = "train_diffusion_unet_real_pointcloud_workspace"
 SAMPLE_LIMIT = 1000       # 사전 검사 시 최대 스캔 샘플 수 (None = 전부)
 BATCH_SIZE_VIS = 32       # cfg.dataloader.batch_size 와 동일하게
-DEVICE_SCAN  = "cpu"      # scan 통계 계산용 디바이스(cpu/cuda)
+DEVICE_SCAN  = "cuda"      # scan 통계 계산용 디바이스(cpu/cuda)
 # ────────────────────────────────────────────────────────────
 
 save_align_timestamp = []
