@@ -46,8 +46,8 @@ class RealEnv:
             max_obs_buffer_size=30,
             obs_key_map=DEFAULT_OBS_KEY_MAP,
             # action
-            max_pos_speed=0.1,
-            max_rot_speed=0.12,
+            max_pos_speed=3,
+            max_rot_speed=3,
             # robot
             init_joints=False,
             # video capture params
@@ -101,7 +101,7 @@ class RealEnv:
             payload_mass=None,
             joints_init=j_init,
             soft_real_time=False,
-            debug=True,
+            debug=False,
             receive_keys=None,
             get_max_k=max_obs_buffer_size
             )

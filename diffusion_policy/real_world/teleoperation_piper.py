@@ -82,6 +82,8 @@ class TeleoperationPiper(mp.Process):
                 raw_gripper =  piper.GetArmGripperMsgs()
                 state=np.asarray(raw_state, dtype=self.dtype)
                 gripper = 1 if raw_gripper[0] <= self.threshold else 0
+                state[:3] = state[:3] * 1e-3
+                state[3:] = np.deg2rad(state[3:])
                 state=np.append(state, gripper)
                 
                 

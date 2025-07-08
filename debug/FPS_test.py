@@ -57,12 +57,12 @@ def main():
             depth, color = frames.get_depth_frame(), frames.get_color_frame()
             if depth is None or color is None:
                 continue
-            
+            print("work")
             frame = align.process(frames)
             pc_filter.set_position_data_scaled(depth.get_depth_scale())
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
             pc=np.asarray(point_cloud) 
-            # pc = pc[pc[:, 2] > 0.0] 
+            pc = pc[pc[:, 2] > 0.0] 
 
             if cnt>200:
                 start=mono_time.now_ms()

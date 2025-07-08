@@ -1,249 +1,127 @@
 import numpy as np
+from piper_sdk import *
 import time
-from typing import Optional, Tuple, List
-from piper_sdk import C_PiperInterface_V2
+import scipy.spatial.transform as st
+import diffusion_policy.common.mono_time as mono_time
+# moai.py에서 컨트롤러를 가져옵니다.
+from moai import PiperCartesianController
 
-class PiperFastIK:
-    """Fast inverse kinematics solver for Piper robot using Levenberg-Marquardt"""
-    
-    def __init__(self):
-        # DH Parameters [a, alpha, d, theta_offset] in meters
-        self.dh_params = [
-            [0,       0,       0.123,   0],
-            [0,       np.pi/2, 0,       -np.pi/2],
-            [0.28503, 0,       0,       0],
-            [0.022,   np.pi/2, 0.25075, 0],
-            [0,       -np.pi/2,0,       0],
-            [0,       np.pi/2, 0.091,   0]
-        ]
-        
-        # Joint limits [min, max] in radians
-        self.joint_limits = [
-            [-2.618, 2.618],
-            [0, 3.14],
-            [-2.697, 0],
-            [-1.832, 1.832],
-            [-1.22, 1.22],
-            [-3.14, 3.14]
-        ]
-        
-        self.n_joints = 6
-    
-    def dh_transform(self, a: float, alpha: float, d: float, theta: float) -> np.ndarray:
-        """Compute DH transformation matrix"""
-        ct = np.cos(theta)
-        st = np.sin(theta)
-        ca = np.cos(alpha)
-        sa = np.sin(alpha)
-        
-        return np.array([
-            [ct, -st*ca,  st*sa, a*ct],
-            [st,  ct*ca, -ct*sa, a*st],
-            [0,   sa,     ca,    d],
-            [0,   0,      0,     1]
-        ])
-    
-    def forward_kinematics(self, joint_angles: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute forward kinematics"""
-        T = np.eye(4)
-        for i in range(self.n_joints):
-            a, alpha, d, theta_offset = self.dh_params[i]
-            theta = joint_angles[i] + theta_offset
-            T = T @ self.dh_transform(a, alpha, d, theta)
-        
-        position = T[:3, 3]
-        rotation = T[:3, :3]
-        return position, rotation
-    
-    def rotation_to_euler(self, R: np.ndarray) -> np.ndarray:
-        """Convert rotation matrix to Euler angles"""
-        sy = np.sqrt(R[0,0]**2 + R[1,0]**2)
-        
-        if sy < 1e-6:
-            x = np.arctan2(-R[1,2], R[1,1])
-            y = np.arctan2(-R[2,0], sy)
-            z = 0
-        else:
-            x = np.arctan2(R[2,1], R[2,2])
-            y = np.arctan2(-R[2,0], sy)
-            z = np.arctan2(R[1,0], R[0,0])
-        
-        return np.array([x, y, z])
-    
-    def compute_jacobian(self, q: np.ndarray, delta: float = 0.001) -> np.ndarray:
-        """Numerical Jacobian using finite differences"""
-        J = np.zeros((6, self.n_joints))
-        
-        # Current pose
-        pos0, rot0 = self.forward_kinematics(q)
-        euler0 = self.rotation_to_euler(rot0)
-        
-        for i in range(self.n_joints):
-            q_plus = q.copy()
-            q_plus[i] = min(q[i] + delta, self.joint_limits[i][1])
-            
-            pos_plus, rot_plus = self.forward_kinematics(q_plus)
-            euler_plus = self.rotation_to_euler(rot_plus)
-            
-            if q_plus[i] != q[i]:
-                J[:3, i] = (pos_plus - pos0) / (q_plus[i] - q[i])
-                J[3:, i] = (euler_plus - euler0) / (q_plus[i] - q[i])
-        
-        return J
-    
-    def wrap_angle(self, angle: float) -> float:
-        """Wrap angle to [-pi, pi]"""
-        while angle > np.pi:
-            angle -= 2 * np.pi
-        while angle < -np.pi:
-            angle += 2 * np.pi
-        return angle
-    
-    def solve_ik(self, target_pose: List[float], 
-                 initial_joints: Optional[List[float]] = None) -> Tuple[Optional[np.ndarray], float]:
-        """
-        Solve inverse kinematics using Levenberg-Marquardt method
-        
-        Args:
-            target_pose: [x, y, z, rx, ry, rz] target pose in meters and radians
-            initial_joints: Initial joint angles for faster convergence (optional)
-            
-        Returns:
-            (joint_angles, computation_time_ms) or (None, computation_time_ms) if failed
-        """
-        start_time = time.perf_counter()
-        
-        # Parse target
-        target_pos = np.array(target_pose[:3])
-        target_euler = np.array(target_pose[3:])
-        
-        # Initial guess
-        if initial_joints is not None:
-            q = np.array(initial_joints)
-        else:
-            q = np.array([0, 1.57, -1.0, 0, 0, 0])  # Default initial guess
-        
-        # Levenberg-Marquardt parameters
-        damping = 0.01
-        max_iter = 10
-        
-        for _ in range(max_iter):
-            # Current pose
-            pos, rot = self.forward_kinematics(q)
-            euler = self.rotation_to_euler(rot)
-            
-            # Error
-            pos_error = target_pos - pos
-            euler_error = np.array([self.wrap_angle(target_euler[i] - euler[i]) for i in range(3)])
-            error = np.concatenate([pos_error, euler_error * 0.5])
-            
-            if np.linalg.norm(error) < 0.005:   # 5mm(threshold)
-                end_time = time.perf_counter()
-                computation_time_ms = (end_time - start_time) * 1000
-                return q, computation_time_ms
-            
-            # Jacobian and update
-            J = self.compute_jacobian(q)
-            JtJ = J.T @ J
-            Jte = J.T @ error
-            
-            try:
-                H = JtJ + damping * np.eye(self.n_joints)
-                dq = np.linalg.solve(H, Jte)
-                
-                # Update with limits
-                q_new = q + 0.5 * dq
-                for i in range(self.n_joints):
-                    q_new[i] = np.clip(q_new[i], 
-                                      self.joint_limits[i][0], 
-                                      self.joint_limits[i][1])
-                
-                # Check improvement
-                pos_new, rot_new = self.forward_kinematics(q_new)
-                euler_new = self.rotation_to_euler(rot_new)
-                error_new = np.concatenate([target_pos - pos_new, 
-                                          np.array([self.wrap_angle(target_euler[i] - euler_new[i]) 
-                                                   for i in range(3)]) * 0.5])
-                
-                if np.linalg.norm(error_new) < np.linalg.norm(error):
-                    q = q_new
-                    damping *= 0.5
-                    damping = max(damping, 1e-6)
-                else:
-                    damping *= 2.0
-                    damping = min(damping, 1e-1)
-            except:
-                break
-        
-        end_time = time.perf_counter()
-        computation_time_ms = (end_time - start_time) * 1000
-        
-        # Return best attempt even if not perfect
-        return q, computation_time_ms
+def interpolate_pose_m_rad(start_pose_m_rad, target_pose_m_rad, num_steps):
+    """
+    시작과 목표 자세 사이를 [m, rad] 단위로 보간하여 경로를 생성합니다.
+    위치는 선형으로, 회전은 Slerp로 보간합니다.
+    """
+    # 위치 보간
+    start_pos = start_pose_m_rad[:3]
+    target_pos = target_pose_m_rad[:3]
+    interpolated_positions = np.linspace(start_pos, target_pos, num_steps)
 
-def connect_robot():
-    """Connect and initialize robot"""
+    # 회전 보간 (Scipy Slerp 사용)
+    # 오일러 각도(회전 벡터)를 Rotation 객체로 변환
+    key_rotations = st.Rotation.from_rotvec([start_pose_m_rad[3:], target_pose_m_rad[3:]])
+    key_times = [0, 1]
+    slerp = st.Slerp(key_times, key_rotations)
+    interp_times = np.linspace(0, 1, num_steps)
+    interpolated_rotations = slerp(interp_times)
+
+    return interpolated_positions, interpolated_rotations
+
+def _deg_to_sdk_joint(rad_angles: np.ndarray) -> list[int]:
+    """라디안 단위의 관절 각도를 Piper SDK 정수 형식으로 변환합니다."""
+    return (np.rad2deg(rad_angles) * 1e3).astype(int).tolist()
+
+# --- 메인 실행 코드 ---
+if __name__ == "__main__":
     piper = C_PiperInterface_V2("can0")
     piper.ConnectPort()
-    while not piper.EnablePiper():
-        time.sleep(0.01)
-    print("Robot connected successfully")
-    return piper
-
-def get_current_joints(piper):
-    """Read current joint angles (millidegrees -> radians)"""
-    joint_msgs = piper.GetArmJointMsgs()
-    # Extract joint values from joint_state (millidegrees)
-    joints_millideg = np.asarray(joint_msgs) * 1000
-    # Convert millidegrees to radians
-    joints_rad = joints_millideg / 57295.7795
-    return joints_millideg, joints_rad
-
-def move_to_joints_ctrl(piper, joint_angles_rad):
-    """Move robot to calculated joint angles"""
-    # Convert radians to millidegrees (integer)
-    factor = 57295.7795
-    joints_millideg = [int(round(angle * factor)) for angle in joint_angles_rad]
-    
-    print(f"Target joints (millideg): {joints_millideg}")
-    
-    # Set motion control
-    piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-    
-    # Control joints (6 axes)
-    piper.JointCtrl(joints_millideg[0], joints_millideg[1], joints_millideg[2],
-                    joints_millideg[3], joints_millideg[4], joints_millideg[5])
-    
-    return joints_millideg
-
-def move_to_endpose():
-    """Move to target end-effector pose"""
-    target_endpose = [-0.3468, -0.1866, -0.0328, 2.8362, 0.3947, -2.1769]
-
-    # Create IK solver
-    ik_solver = PiperFastIK()
-    
-    # Connect robot
-    piper = connect_robot()
-    
-    # Read current joints
-    current_millideg, current_rad = get_current_joints(piper)
-    print(f"Current joints (millideg): {current_millideg}")
-    
-    # Calculate IK
-    print(f"Target endpose: {target_endpose}")
-    result_joints_rad, computation_time = ik_solver.solve_ik(target_endpose, initial_joints=current_rad)
-    
-    if result_joints_rad is not None:
-        result_millideg = [int(round(angle * 57295.7795)) for angle in result_joints_rad]
-        print(f"Calculated joints (millideg): {result_millideg}")
-        print(f"Computation time: {computation_time:.1f} ms")
+    try:
+        # moai.py의 컨트롤러를 생성합니다.
+        ik_controller = PiperCartesianController()
         
-        move_to_joints_ctrl(piper, result_joints_rad)
-        print("Movement completed")
-    else:
-        print("IK failed")
+        # 로봇 활성화
+        piper.EnableArm(7)
+        print("Waiting for arm to enable...")
+        time.sleep(2)
+        
+        # 초기 위치로 이동
+        piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
+        piper.JointCtrl([0, 0, 0, 0, 0, 0])
+        print("Moving to initial joint state. Waiting for 5 seconds...")
+        time.sleep(5)
 
-if __name__ == "__main__":
-    # Example: [x, y, z, rx, ry, rz] in meters and radians
-    move_to_endpose()
+        # 현재 로봇의 자세를 시작 자세로 사용
+        current_joints_rad = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
+        start_pos_m, start_rot_rad = ik_controller.calculate_forward_kinematics(current_joints_rad)
+        start_pose = np.concatenate([start_pos_m, start_rot_rad])
+        print(f"Start Pose: {np.round(start_pose, 3)}")
+        print(f"get_start_pose: {np.round(piper.GetArmEndPoseMsgs(), 3)}")
+
+        # 목표 자세 (target_pose) [m, m, m, rad, rad, rad]
+        target_pose = np.array([0.054952, 0.0, 0.493991,
+                                np.deg2rad(0.0), np.deg2rad(85.0), np.deg2rad(0.0)])
+        print(f"Target Pose: {np.round(target_pose, 3)}")
+
+        # 보간 스텝 및 제어 주기 설정
+        num_interpolation_steps = 20
+        control_period = 0.005 # 50Hz
+        
+        # 경로 보간
+        trajectory_positions, trajectory_rotations = interpolate_pose_m_rad(
+            start_pose, target_pose, num_interpolation_steps
+        )
+        
+        print(f"--- Starting Trajectory Execution ({num_interpolation_steps} steps) ---")
+        
+        # 제어 루프 시작
+        q_current = current_joints_rad
+        duration = np.array([])
+        cnt =0
+        for i in range(num_interpolation_steps):
+            start_time = mono_time.now_s()
+            # 1. 현재 스텝의 목표 자세를 설정합니다.
+            target_pos = trajectory_positions[i]
+            # moai.py의 IK는 오일러 각도를 사용합니다.
+            target_rot = trajectory_rotations[i].as_rotvec()
+
+            # 2. moai 컨트롤러를 사용하여 IK를 계산합니다.
+            # solve_inverse_kinematics(pos, rot, q_init) -> q, time, converged
+            t1 = mono_time.now_ms()
+            q_target, _, converged = ik_controller.solve_inverse_kinematics(
+                target_position_m=target_pos.tolist(),
+                target_rotation_rad=target_rot.tolist(),
+                initial_joints_rad=q_current.tolist()
+            )
+            duration = np.append(duration, mono_time.now_ms() - t1)
+            
+            if converged:
+                # 3. 로봇에 명령을 전송합니다.
+                piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
+                piper.JointCtrl(_deg_to_sdk_joint(q_target))
+                # 다음 IK를 위해 현재 타겟을 초기 추정값으로 사용
+                q_current = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
+            else:
+                # print(f"IK solution not found for step {i}. Skipping command.")
+                # IK 실패 시, 실제 로봇의 현재 관절 각도를 다시 읽어옵니다.
+                cnt+=1
+                q_current = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
+
+            # 5. 제어 주기를 맞춥니다.
+            elapsed = mono_time.now_s() - start_time
+            sleep_time = max(0, 0.005 - elapsed)
+            if sleep_time >0:
+                time.sleep(sleep_time) 
+        time.sleep(5)
+        print(f"duration \n \
+              mean: {duration.mean()} \n \
+              max: {duration.max()}\n \
+              min: {duration.min()}\n \
+              failed: {cnt}")
+
+    finally:
+        print("Trajectory finished. Moving to zero position.")
+        piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
+        piper.JointCtrl([0, 0, 0, 0, 0, 0])
+        time.sleep(3)
+        piper.DisableArm(7)
+        piper.DisconnectPort()
+        print("Disconnected.")

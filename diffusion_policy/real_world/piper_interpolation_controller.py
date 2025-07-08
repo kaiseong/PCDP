@@ -209,7 +209,6 @@ class PiperInterpolationController(mp.Process):
         assert target_time > mono_time.now_s()-0.002 # 2ms tolerance
         pose = np.asarray(pose,dtype=float)
         assert pose.shape == (6,)
-
         message = {
             'cmd': Command.SCHEDULE_WAYPOINT.value,
             'target_pose': pose,
@@ -236,7 +235,7 @@ class PiperInterpolationController(mp.Process):
         
         # start rtde
         try:
-            piper = C_PiperInterface_V2("can0")
+            piper = C_PiperInterface_V2("can_slave")
             piper.ConnectPort()
         except Exception as e:
             cprint(f"[Piper_Controller] Failed to connect to Piper: {e}", "magenta", attrs=["bold"])
@@ -342,7 +341,23 @@ class PiperInterpolationController(mp.Process):
 
                 # 2. Get target EEF pose from interpolator
                 target_pose_vec = pose_interp(t_now)
+                x = target_pose_vec[0]
+                y = target_pose_vec[1]
+                z = target_pose_vec[2]
+                roll = target_pose_vec[3]
+                pitch = target_pose_vec[4]
+                yaw = target_pose_vec[5]
                 
+                """
+                pos = target_pose_vec[:3] *1e6
+                rot = np.rad2deg(target_pose_vec[3:])*1e3
+                target= np.append(pos.astype(int), rot.astype(int))
+                target = target.tolist()
+                """
+                
+
+
+                print(f"PiperController: {x:.4f}, {y:.4f}, {z:.4f}, {roll:.4f}, {pitch:.4f}, {yaw:.4f}")
                 # 3. Convert to pin.SE3 for IK
                 pos = target_pose_vec[:3]
                 rot_vec = target_pose_vec[3:]
@@ -354,9 +369,10 @@ class PiperInterpolationController(mp.Process):
                 
                 # 5. Send command to robot
                 if target_joints is not None:
-                    piper.MotionCtrl_2(0x01, 0x01, 50, 0x00) # Using a moderate speed
+                    piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
                     piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
                     last_q = target_joints # Update last known good joint angles for the next iteration's initial guess
+
                 else:
                     # IK failed, what to do? For now, print a warning.
                     # In a real scenario, might want to stop the robot.

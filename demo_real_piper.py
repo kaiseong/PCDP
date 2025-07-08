@@ -25,7 +25,7 @@ import numpy as np
 from termcolor import cprint
 import scipy.spatial.transform as st
 from diffusion_policy.real_world.real_env_piper import RealEnv
-from diffusion_policy.real_world.joypad_shared_memory import JoypadSpacemouse
+from diffusion_policy.real_world.teleoperation_piper import TeleoperationPiper
 from diffusion_policy.common.precise_sleep import precise_wait
 import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.real_world.keystroke_counter import (
@@ -49,7 +49,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
     with SharedMemoryManager() as shm_manager:
         with KeystrokeCounter() as key_counter, \
-            JoypadSpacemouse(shm_manager=shm_manager) as sm, \
+            TeleoperationPiper(shm_manager=shm_manager) as ms, \
             RealEnv(
                 output_dir=output, 
                 # IK params
@@ -65,28 +65,12 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             ) as env:
             cv2.setNumThreads(1)
             
-            
-            # 간단히 "5초 이내"로 기다리면서 도달 여부 검사
-            base_pose = [0.03751, 0.012182, 0.493991, 0.96503, 1.4663, 1.18428]
+            base_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0]
             plan_time = mono_time.now_s() + 2.0
             env.exec_actions([base_pose], [plan_time])
             print("Moving to the base_pose, please wait...")
-            start_block = time.time()
-            while True:
-                if time.time() - start_block > 5.0:
-                    break  # 최대 5초만 기다림
-                # 현재 로봇 위치
-                state = env.get_robot_state()
-                actual_pose = state['ArmEndPoseMsgs']  # length=6
-                dist = np.linalg.norm(
-                    np.array(actual_pose[:3]) - np.array(base_pose[:3]))
-                if dist < 0.01:
-                    # 어느정도 도달했다고 가정
-                    break
-                time.sleep(0.05)
-            print("Base pose reached (or timed out).")
-
-            time.sleep(1.0)
+            
+            time.sleep(2.0)
             print('Ready!')
             state = env.get_robot_state()
             target_pose = base_pose.copy()
@@ -173,25 +157,9 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
                 precise_wait(t_sample)
                 # get teleop command
-                sm_state = sm.get_motion_state_transformed()
+                target_pose = ms.get_motion_state()[:6]
+                print(target_pose)
                 # print(sm_state)
-                dpos = sm_state[:3] * (env.max_pos_speed / frequency)
-                drot_xyz = sm_state[3:] * (env.max_rot_speed / frequency)
-                
-                if not sm.is_button_pressed(7):
-                    # translation mode
-                    drot_xyz[:] = 0
-                else:
-                    dpos[:] = 0
-                if not sm.is_button_pressed(6):
-                    # 2D translation mode
-                    dpos[2] = 0
-
-                drot = st.Rotation.from_euler('xyz', drot_xyz)
-                target_pose[:3] += dpos
-                target_pose[3:] = (drot * st.Rotation.from_rotvec(
-                    target_pose[3:])).as_rotvec()
-
                 # execute teleop command
                 env.exec_actions(
                     actions=[target_pose], 
