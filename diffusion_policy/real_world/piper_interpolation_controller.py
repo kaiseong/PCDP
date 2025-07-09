@@ -13,10 +13,13 @@ from piper_sdk import *
 from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from diffusion_policy.common.no_pose_trajectory_interpolator import NoPoseTrajectoryInterpolator as PoseTrajectoryInterpolator
 import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
+from diffusion_policy.real_world.trac_ik_controller import TracIKController
 from termcolor import cprint
+
+
 
 
 class Command(enum.Enum):
@@ -81,11 +84,17 @@ class PiperInterpolationController(mp.Process):
         super().__init__(name="PiperInterpolationController")
         
         # IK Controller
-        self.ik_controller = PinocchioIKController(
+        # self.ik_controller = PinocchioIKController(
+        #     urdf_path=urdf_path,
+        #     mesh_dir=mesh_dir,
+        #     ee_link_name=ee_link_name,
+        #     joints_to_lock_names=joints_to_lock_names
+        # )
+        self.ik_controller = TracIKController(
             urdf_path=urdf_path,
-            mesh_dir=mesh_dir,
             ee_link_name=ee_link_name,
-            joints_to_lock_names=joints_to_lock_names
+            base_link_name="base_link",
+            solve_type="Speed",
         )
         
         self.frequency = frequency
@@ -337,12 +346,17 @@ class PiperInterpolationController(mp.Process):
                     else:
                         state[k] = np.asarray(raw)
                 
-                current_joints_rad = np.deg2rad(piper.GetArmJointMsgs())
+                current_joints_rad = np.deg2rad(state['ArmJointMsgs'])
                 last_q = current_joints_rad
                 
 
                 # 2. Get target EEF pose from interpolator
                 target_pose_vec = pose_interp(t_now)
+                # [MODIFIED] Get the last waypoint to use its raw rotation
+                # This prevents the Slerp from flipping the rotation undesirably.
+                # last_waypoint_pose = pose_interp.poses[-1]
+                # target_pose_vec[3:] = last_waypoint_pose[3:]
+                
                 x = target_pose_vec[0]
                 y = target_pose_vec[1]
                 z = target_pose_vec[2]
@@ -363,8 +377,8 @@ class PiperInterpolationController(mp.Process):
                 # 3. Convert to pin.SE3 for IK
                 pos = target_pose_vec[:3]
                 rot_vec = target_pose_vec[3:]
-                rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
-                # # rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
+                # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
+                rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
                 target_se3 = pin.SE3(rot, pos)
                 
                 # 4. Calculate IK using the most recent joint state
