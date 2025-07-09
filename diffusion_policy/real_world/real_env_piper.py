@@ -45,9 +45,6 @@ class RealEnv:
             # obs
             max_obs_buffer_size=30,
             obs_key_map=DEFAULT_OBS_KEY_MAP,
-            # action
-            max_pos_speed=3,
-            max_rot_speed=3,
             # robot
             init_joints=False,
             # video capture params
@@ -79,7 +76,6 @@ class RealEnv:
             verbose=True
         )
 
-        cube_diag = np.linalg.norm([1,1,1])
         j_init = np.array([0.0, 0.5, -1.0, 0.0, 1.0, 0.0]) 
         if not init_joints:
             j_init = None
@@ -95,8 +91,6 @@ class RealEnv:
             frequency=200, # Piper frequency
             lookahead_time=0.1,
             gain=300,
-            max_pos_speed=max_pos_speed*cube_diag,
-            max_rot_speed=max_rot_speed*cube_diag,
             launch_timeout=3,
             payload_mass=None,
             joints_init=j_init,
@@ -122,8 +116,6 @@ class RealEnv:
         self.frequency = frequency
         self.n_obs_steps = n_obs_steps
         self.max_obs_buffer_size = max_obs_buffer_size
-        self.max_pos_speed = max_pos_speed
-        self.max_rot_speed = max_rot_speed
         self.obs_key_map = obs_key_map
         # recording
         self.output_dir = output_dir

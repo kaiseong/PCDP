@@ -28,9 +28,9 @@ class PinocchioIKController:
         self._initialize_model(urdf_path, mesh_dir, joints_to_lock_names)
 
         # IK 계산을 위한 파라미터
-        self.DAMPING = 5e-2
+        self.DAMPING = 1e-4
         self.MAX_ITERATIONS = 100
-        self.TOLERANCE = 1e-1
+        self.TOLERANCE = 1e-4
 
     def _initialize_model(self, urdf_path, mesh_dir, joints_to_lock_names):
         """URDF에서 모델을 로드하고 축소 모델을 생성합니다."""

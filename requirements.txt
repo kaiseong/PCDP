@@ -67,7 +67,7 @@ fvcore
 gdown==5.2.0
 gitdb
 GitPython
-glfW==1.12.0
+glfw==1.12.0
 google-api-core==2.25.1
 google-auth
 google-auth-oauthlib
@@ -82,6 +82,7 @@ idna
 imagecodecs==2022.9.26
 imageio
 imageio-ffmpeg
+ikpy
 importlib_metadata
 importlib_resources
 iopath
