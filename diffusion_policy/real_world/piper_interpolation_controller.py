@@ -14,7 +14,6 @@ from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
-from diffusion_policy.common.piper_trajectory_interpolator import PoseTrajectoryInterpolator
 import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
 from termcolor import cprint
@@ -25,28 +24,6 @@ class Command(enum.Enum):
     STOP = 0
     SERVOL = 1
     SCHEDULE_WAYPOINT = 2
-
-def get_current_pose_from_fk(piper_interface, ik_controller):
-    """
-    현재 관절 각도를 기준으로 FK를 계산하여 정확한 EndPose를 얻는 함수
-    """
-    # 1. 로봇에서 현재 관절 각도를 읽어옴 (단위: rad)
-    current_joints_deg = np.asarray(piper_interface.GetArmJointMsgs())
-    current_joints_rad = np.deg2rad(current_joints_deg)
-
-    # 2. Pinocchio를 사용해 FK 계산
-    pin.forwardKinematics(ik_controller.model, ik_controller.data, current_joints_rad)
-    pin.updateFramePlacements(ik_controller.model, ik_controller.data)
-
-    # 3. End-Effector의 Pose (SE3) 추출
-    ee_frame_id = ik_controller.ee_frame_id
-    current_se3 = ik_controller.data.oMf[ee_frame_id]
-
-    # 4. SE3를 [x, y, z, rx, ry, rz] 형태로 변환
-    pos = current_se3.translation
-    rot_vec = st.Rotation.from_matrix(current_se3.rotation).as_rotvec()
-
-    return np.concatenate((pos, rot_vec))
 
 
 class PiperInterpolationController(mp.Process):
@@ -64,10 +41,10 @@ class PiperInterpolationController(mp.Process):
             joints_to_lock_names: List[str],
             # Controller parameters
             frequency = 200,
-            lookahead_time=0.5,
+            lookahead_time=0.1,
             gain = 300,
-            max_pos_speed=100000,
-            max_rot_speed=100000,
+            max_pos_speed=30,
+            max_rot_speed=170,
             launch_timeout=3,
             payload_mass=None,
             joints_init=None,
@@ -318,21 +295,17 @@ class PiperInterpolationController(mp.Process):
             
             # Read current state
             curr_joints = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
-            #curr_pose = self._sdk_pose_to_vec(piper.GetArmEndPoseMsgs())
-            curr_pose = get_current_pose_from_fk(piper, self.ik_controller)
+            curr_pose = self._sdk_pose_to_vec(piper.GetArmEndPoseMsgs())
             
             curr_t = time.monotonic()
             last_waypoint_time = curr_t
             
             # Initialize interpolator with current EEF pose
-            # pose_interp = PoseTrajectoryInterpolator(
-            #     times=[curr_t],
-            #     poses=[curr_pose]
-            # )
             pose_interp = PoseTrajectoryInterpolator(
                 times=[curr_t],
                 poses=[curr_pose]
             )
+            
             
             # Initialize last known joint angles for IK
             last_q = curr_joints
@@ -364,8 +337,9 @@ class PiperInterpolationController(mp.Process):
                     else:
                         state[k] = np.asarray(raw)
                 
-                current_joints_rad = np.deg2rad(state["ArmJointMsgs"])
+                current_joints_rad = np.deg2rad(piper.GetArmJointMsgs())
                 last_q = current_joints_rad
+                
 
                 # 2. Get target EEF pose from interpolator
                 target_pose_vec = pose_interp(t_now)
@@ -390,6 +364,7 @@ class PiperInterpolationController(mp.Process):
                 pos = target_pose_vec[:3]
                 rot_vec = target_pose_vec[3:]
                 rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
+                # # rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
                 target_se3 = pin.SE3(rot, pos)
                 
                 # 4. Calculate IK using the most recent joint state
@@ -399,7 +374,6 @@ class PiperInterpolationController(mp.Process):
                 if target_joints is not None:
                     piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
                     piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
-                    last_q = target_joints # Update last known good joint angles for the next iteration's initial guess
 
                 else:
                     # IK failed, what to do? For now, print a warning.
