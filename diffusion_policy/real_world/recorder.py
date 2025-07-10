@@ -261,7 +261,7 @@ class Recorder(mp.Process):
         )
 
         action_example = {
-            'action': np.zeros(6, dtype = np.float64),
+            'action': np.zeros(7, dtype = np.float64),
             'timestamp': 0.0,
             'stage': 0
         }

@@ -65,7 +65,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             ) as env:
             cv2.setNumThreads(1)
             
-            base_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0]
+            base_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
             plan_time = mono_time.now_s() + 2.0
             env.exec_actions([base_pose], [plan_time])
             print("Moving to the base_pose, please wait...")
@@ -157,9 +157,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
                 precise_wait(t_sample)
                 # get teleop command
-                target_pose = ms.get_motion_state()[:6]
-                print(target_pose)
-                # print(sm_state)
+                target_pose = ms.get_motion_state()
                 # execute teleop command
                 env.exec_actions(
                     actions=[target_pose], 

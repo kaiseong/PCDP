@@ -17,13 +17,13 @@ if __name__ == "__main__":
     piper_slave.ConnectPort()
     duration = np.array([])
     try:
-        """
+        
         ik_controller = PinocchioIKController(
             urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
             mesh_dir="/home/moai/diffusion_policy",
             ee_link_name="link6",
         )
-        
+        """
         ik_controller = TracIKController(
             urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
             ee_link_name="link6",
@@ -31,7 +31,7 @@ if __name__ == "__main__":
             solve_type="Speed",
         )
         """
-        ik_controller = PinocchioDhIkController()
+        # ik_controller = PinocchioDhIkController()
 
 
         piper_slave.EnableArm(7)
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         while True:
             start_time = mono_time.now_s()
             # [mm, mm, mm, deg, deg, deg]
-            if tick % 20 == 0:
+            if tick % 1 == 0:
                 EndPose = np.asarray(piper_master.GetArmEndPoseMsgs())
             
 

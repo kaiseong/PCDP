@@ -55,6 +55,7 @@ class PiperInterpolationController(mp.Process):
             debug=False,
             receive_keys=None,
             get_max_k=128,
+            mode="Joint",
             ):
         """
         frequency: piper 200 Hz
@@ -84,18 +85,18 @@ class PiperInterpolationController(mp.Process):
         super().__init__(name="PiperInterpolationController")
         
         # IK Controller
-        # self.ik_controller = PinocchioIKController(
-        #     urdf_path=urdf_path,
-        #     mesh_dir=mesh_dir,
-        #     ee_link_name=ee_link_name,
-        #     joints_to_lock_names=joints_to_lock_names
-        # )
-        self.ik_controller = TracIKController(
+        self.ik_controller = PinocchioIKController(
             urdf_path=urdf_path,
+            mesh_dir=mesh_dir,
             ee_link_name=ee_link_name,
-            base_link_name="base_link",
-            solve_type="Speed",
+            joints_to_lock_names=joints_to_lock_names
         )
+        # self.ik_controller = TracIKController(
+        #     urdf_path=urdf_path,
+        #     ee_link_name=ee_link_name,
+        #     base_link_name="base_link",
+        #     solve_type="Speed",
+        # )
         
         self.frequency = frequency
         self.lookahead_time = lookahead_time
@@ -107,11 +108,12 @@ class PiperInterpolationController(mp.Process):
         self.joints_init = joints_init
         self.soft_real_time = soft_real_time
         self.verbose = debug
+        self.mode = mode
         
         # build input queue
         example = {
             'cmd': Command.SERVOL.value,
-            'target_pose': np.zeros((6,), dtype=np.float64),
+            'target_pose': np.zeros((7,), dtype=np.float64),
             'duration': 0.0,
             'target_time': 0.0,
         }
@@ -134,7 +136,7 @@ class PiperInterpolationController(mp.Process):
             'ArmEndPoseMsgs': (6,),   # X Y Z RX RY RZ
             'ArmJointMsgs':   (6,),   # j1~j6
             'ArmGripperMsgs': (3,),   # angle effort status
-            'TargetEndPose': (6,)
+            'TargetEndPose': (7,)
         }
         example = {k: np.zeros(shape_map[k], dtype=np.float64) for k in receive_keys}
         example['robot_receive_timestamp'] = mono_time.now_s()
@@ -205,7 +207,7 @@ class PiperInterpolationController(mp.Process):
         assert self.is_alive()
         assert (duration >= (1/self.frequency))
         pose = np.asarray(pose, dtype=float)
-        assert pose.shape == (6,)
+        assert pose.shape == (7,)
 
         message = {
             'cmd': Command.SERVOL.value,
@@ -217,7 +219,7 @@ class PiperInterpolationController(mp.Process):
     def schedule_waypoint(self, pose, target_time):
         assert target_time > mono_time.now_s()-0.002 # 2ms tolerance
         pose = np.asarray(pose,dtype=float)
-        assert pose.shape == (6,)
+        assert pose.shape == (7,)
         message = {
             'cmd': Command.SCHEDULE_WAYPOINT.value,
             'target_pose': pose,
@@ -304,7 +306,9 @@ class PiperInterpolationController(mp.Process):
             
             # Read current state
             curr_joints = np.deg2rad(np.asarray(piper.GetArmJointMsgs()))
-            curr_pose = self._sdk_pose_to_vec(piper.GetArmEndPoseMsgs())
+            curr_pose_6d = self._sdk_pose_to_vec(piper.GetArmEndPoseMsgs())
+            # gripper state is not available from GetArmEndPoseMsgs, so append a default value (1.0 for open)
+            curr_pose = np.append(curr_pose_6d, 1.0)
             
             curr_t = time.monotonic()
             last_waypoint_time = curr_t
@@ -352,55 +356,40 @@ class PiperInterpolationController(mp.Process):
 
                 # 2. Get target EEF pose from interpolator
                 target_pose_vec = pose_interp(t_now)
-                # [MODIFIED] Get the last waypoint to use its raw rotation
-                # This prevents the Slerp from flipping the rotation undesirably.
-                last_waypoint_pose = pose_interp.poses[-1]
-                target_pose_vec[3:] = last_waypoint_pose[3:]
                 
-                x = target_pose_vec[0]
-                y = target_pose_vec[1]
-                z = target_pose_vec[2]
-                roll = target_pose_vec[3]
-                pitch = target_pose_vec[4]
-                yaw = target_pose_vec[5]
+                if self.mode == "EndPose":
+                    pos = target_pose_vec[:3] *1e6
+                    rot = np.rad2deg(target_pose_vec[3:6])*1e3
+                    target= np.append(pos.astype(int), rot.astype(int))
+                    target = target.tolist()
+                else:
+                    pos = target_pose_vec[:3]
+                    rot_vec = target_pose_vec[3:6]
+                    # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
+                    rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
+                    target_se3 = pin.SE3(rot, pos)
                 
+                gripper = target_pose_vec[6]
                 
-                pos = target_pose_vec[:3] *1e6
-                rot = np.rad2deg(target_pose_vec[3:])*1e3
-                target= np.append(pos.astype(int), rot.astype(int))
-                target = target.tolist()
-                
-                
-
-
-                print(f"PiperController: {x:.4f}, {y:.4f}, {z:.4f}, {roll:.4f}, {pitch:.4f}, {yaw:.4f}")
-                # 3. Convert to pin.SE3 for IK
-                pos = target_pose_vec[:3]
-                rot_vec = target_pose_vec[3:]
-                # gripper = target_pose_vec[6]
-                # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
-                rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
-                target_se3 = pin.SE3(rot, pos)
                 
                 # 4. Calculate IK using the most recent joint state
-                target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
-                
-                # piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
-                # piper.EndPoseCtrl(target)
-                # 5. Send command to robot
-                if target_joints is not None:
-                    piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
-                    piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
+                if self.mode == "EndPose":
+                    piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
+                    piper.EndPoseCtrl(target)
                 else:
-                    # IK failed, what to do? For now, print a warning.
-                    # In a real scenario, might want to stop the robot.
-                    if self.verbose:
-                        cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
+                    target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
+                    
+                    if target_joints is not None:
+                        piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
+                        piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
+                    else:
+                        if self.verbose:
+                            cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
                 
-                # if gripper == 1:
-                #     piper.GripperCtrl(-8, 1000, 0x03)
-                # else:
-                #     piper.GripperCtrl(80, 1000, 0x02)
+                if gripper <= 1.1 and gripper >= 0.9:
+                    piper.GripperCtrl(0, 1000, 0x01)
+                else:
+                    piper.GripperCtrl(95000, 1000, 0x01)
 
                 # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad
@@ -459,13 +448,15 @@ class PiperInterpolationController(mp.Process):
                     self.ready_event.set()
                 iter_idx += 1
 
+                if debug_first:
+                    durations = np.append(durations, mono_time.now_ms()-debug_t_start)
+                debug_first = True
+
                 spent = time.perf_counter() - loop_start
                 if spent < dt:
                     time.sleep(dt - spent)
                 
-                if debug_first:
-                    durations = np.append(durations, mono_time.now_ms()-debug_t_start)
-                debug_first = True
+                
         
         finally:
             print(f"Piper Controller\n\
