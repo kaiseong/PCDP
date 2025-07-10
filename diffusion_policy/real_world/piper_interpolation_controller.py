@@ -13,7 +13,7 @@ from piper_sdk import *
 from diffusion_policy.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from diffusion_policy.common.no_pose_trajectory_interpolator import NoPoseTrajectoryInterpolator as PoseTrajectoryInterpolator
+from diffusion_policy.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import diffusion_policy.common.mono_time as mono_time
 from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
 from diffusion_policy.real_world.trac_ik_controller import TracIKController
@@ -354,8 +354,8 @@ class PiperInterpolationController(mp.Process):
                 target_pose_vec = pose_interp(t_now)
                 # [MODIFIED] Get the last waypoint to use its raw rotation
                 # This prevents the Slerp from flipping the rotation undesirably.
-                # last_waypoint_pose = pose_interp.poses[-1]
-                # target_pose_vec[3:] = last_waypoint_pose[3:]
+                last_waypoint_pose = pose_interp.poses[-1]
+                target_pose_vec[3:] = last_waypoint_pose[3:]
                 
                 x = target_pose_vec[0]
                 y = target_pose_vec[1]
@@ -364,12 +364,12 @@ class PiperInterpolationController(mp.Process):
                 pitch = target_pose_vec[4]
                 yaw = target_pose_vec[5]
                 
-                """
+                
                 pos = target_pose_vec[:3] *1e6
                 rot = np.rad2deg(target_pose_vec[3:])*1e3
                 target= np.append(pos.astype(int), rot.astype(int))
                 target = target.tolist()
-                """
+                
                 
 
 
@@ -377,7 +377,7 @@ class PiperInterpolationController(mp.Process):
                 # 3. Convert to pin.SE3 for IK
                 pos = target_pose_vec[:3]
                 rot_vec = target_pose_vec[3:]
-                gripper = target_pose_vec[6]
+                # gripper = target_pose_vec[6]
                 # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
                 rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
                 target_se3 = pin.SE3(rot, pos)
@@ -385,21 +385,22 @@ class PiperInterpolationController(mp.Process):
                 # 4. Calculate IK using the most recent joint state
                 target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
                 
+                # piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
+                # piper.EndPoseCtrl(target)
                 # 5. Send command to robot
                 if target_joints is not None:
                     piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
                     piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
-
                 else:
                     # IK failed, what to do? For now, print a warning.
                     # In a real scenario, might want to stop the robot.
                     if self.verbose:
                         cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
                 
-                if gripper == 1:
-                    piper.GripperCtrl(-8, 1000, 0x03)
-                else:
-                    piper.GripperCtrl(80, 1000, 0x02)
+                # if gripper == 1:
+                #     piper.GripperCtrl(-8, 1000, 0x03)
+                # else:
+                #     piper.GripperCtrl(80, 1000, 0x02)
 
                 # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad

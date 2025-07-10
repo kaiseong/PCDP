@@ -16,19 +16,6 @@ if __name__ == "__main__":
     piper_slave.ConnectPort()
     duration = np.array([])
     try:
-        """
-        ik_controller = PinocchioIKController(
-            urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
-            mesh_dir="/home/moai/diffusion_policy",
-            ee_link_name="link6",
-        )
-        """
-        ik_controller = TracIKController(
-            urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
-            ee_link_name="link6",
-            base_link_name="base_link",
-            solve_type="Speed",
-        )
 
         piper_slave.EnableArm(7)
         print("Waiting for slave arm to enable...")
@@ -48,23 +35,16 @@ if __name__ == "__main__":
             if tick % 20 == 0:
                 EndPose = np.asarray(piper_master.GetArmEndPoseMsgs())
             
+            command_pose = (EndPose *1e3).astype(int).tolist()
+            
 
-            position = EndPose[:3]/1e3
-            rotation = np.deg2rad(EndPose[3:])
-            rot_matrix = st.Rotation.from_euler('xyz', rotation).as_matrix()
-            command_pose = pin.SE3(rot_matrix, position)
-
-            current_joints_rad = np.deg2rad(np.asarray(piper_slave.GetArmJointMsgs()))
             t1=mono_time.now_ms()
-            target_joints_rad = ik_controller.calculate_ik(command_pose, current_joints_rad)
             duration = np.append(duration, mono_time.now_ms()-t1)
-            if target_joints_rad is not None:
-                piper_slave.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-                cmd = (np.rad2deg(target_joints_rad)*1e3).astype(int).tolist()
-                print(cmd)
-                piper_slave.JointCtrl(cmd)
-            else:
-                cnt+=1
+            piper_slave.MotionCtrl_2(0x01, 0x02, 100, 0x00)
+            piper_slave.EndPoseCtrl(command_pose)
+            print(command_pose)
+            cnt+=1
+            
             elapsed = mono_time.now_s() - start_time
             sleep_time = max(0, 0.005 - elapsed)
             if sleep_time >0:
@@ -73,6 +53,7 @@ if __name__ == "__main__":
             tick+=1
             
     finally:
+        duration = duration[1:]
         print(f"mean: {duration.mean()}\n \
                 max: {duration.max()}\n \
                 min: {duration.min()}")

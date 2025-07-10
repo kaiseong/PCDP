@@ -2,6 +2,7 @@ from piper_sdk import *
 import numpy as np
 from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
 from diffusion_policy.real_world.trac_ik_controller import TracIKController
+from diffusion_policy.real_world.pinocchio_dh_ik_controller import PinocchioDhIkController
 import time
 import scipy.spatial.transform as st
 import pinocchio as pin
@@ -22,13 +23,16 @@ if __name__ == "__main__":
             mesh_dir="/home/moai/diffusion_policy",
             ee_link_name="link6",
         )
-        """
+        
         ik_controller = TracIKController(
             urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
             ee_link_name="link6",
             base_link_name="base_link",
             solve_type="Speed",
         )
+        """
+        ik_controller = PinocchioDhIkController()
+
 
         piper_slave.EnableArm(7)
         print("Waiting for slave arm to enable...")
@@ -73,6 +77,7 @@ if __name__ == "__main__":
             tick+=1
             
     finally:
+        duration = duration[1:]
         print(f"mean: {duration.mean()}\n \
                 max: {duration.max()}\n \
                 min: {duration.min()}")

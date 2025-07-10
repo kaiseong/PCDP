@@ -2,54 +2,66 @@
 import pinocchio as pin
 import numpy as np
 
+import pinocchio as pin
+import numpy as np
+
+# (PinocchioDhIkController 클래스 정의는 그대로 둡니다)
+
 def build_model_from_dh():
     """
     Builds a Pinocchio model from Denavit-Hartenberg parameters.
-    The DH parameters are taken from the C_PiperForwardKinematics class.
-    Note: Pinocchio uses meters, so we convert mm to m.
+    This version implements the Standard DH convention correctly.
+    The transform from frame i-1 to i is: T_i = Rot_z(theta_i) * Trans_z(d_i) * Trans_x(a_i) * Rot_x(alpha_i)
     """
     model = pin.Model()
 
-    # DH parameters from piper_fk.py (dh_is_offset = 0x00)
-    # Link lengths (a) in meters
+    # DH parameters from piper_fk.py (dh_is_offset = 0x01), units converted to meters
     a = np.array([0.0, 0.0, 285.03, -21.98, 0.0, 0.0]) / 1000.0
-    # Link twists (alpha) in radians
     alpha = np.array([0.0, -np.pi / 2, 0.0, np.pi / 2, -np.pi / 2, np.pi / 2])
-    # Link offsets (d) in meters
     d = np.array([123.0, 0.0, 0.0, 250.75, 0.0, 91.0]) / 1000.0
-    # Joint angle offsets (theta) in radians
-    theta_offset = np.array([0.0, -np.pi * 174.22 / 180, -100.78 / 180 * np.pi, 0.0, 0.0, 0.0])
+    theta_offset = np.array([0.0, -np.pi * 172.22 / 180, -102.78 / 180 * np.pi, 0.0, 0.0, 0.0])
 
-    parent_joint_id = 0
-    # The transformation from the base to the first joint
-    # This is often implicitly handled in URDFs but needs to be explicit here.
-    # Based on the DH table, the first transformation is along Z.
-    base_to_j1 = pin.SE3(np.eye(3), np.array([0, 0, d[0]]))
+    # Initialize the current transformation as identity (representing the world frame)
+    current_transform = pin.SE3.Identity()
 
     for i in range(6):
-        # The transformation for a link i is: Rot_z(theta_i) * Trans_z(d_i) * Trans_x(a_i) * Rot_x(alpha_i)
-        # In Pinocchio, we define the joint and then the body attached to it.
-        # The joint applies Rot_z(theta_i), and the body inertia has the fixed transformation.
+        # The placement of the joint i's frame is defined relative to the previous frame (i-1).
+        # We first apply the fixed transformations from the previous link (Trans_x and Rot_x).
+        # This defines the location of joint i in the frame of joint i-1.
         
-        # Placement of the joint in the parent frame
-        M = pin.SE3.Identity()
-        if i == 0:
-            # The first joint is placed relative to the world origin
-            M.translation = np.array([0.0, 0.0, d[0]])
-        else:
-            # Subsequent joints are placed relative to the previous joint's frame
-            # after its fixed transformation.
-            M = pin.SE3(pin.rpy.rpyToMatrix(alpha[i-1], 0, theta_offset[i-1]), np.array([a[i-1], 0, d[i-1]]))
+        # 1. Transformation from previous link's frame (i-1)
+        # For i=0, this is identity. For i>0, this is Trans_x(a_{i-1}) * Rot_x(alpha_{i-1})
+        if i > 0:
+            trans_x_a = pin.SE3(np.eye(3), np.array([a[i-1], 0, 0]))
+            rot_x_alpha = pin.SE3(pin.rpy.rpyToMatrix(alpha[i-1], 0, 0), np.zeros(3))
+            current_transform = current_transform * trans_x_a * rot_x_alpha
 
-        joint_id = model.addJoint(parent_joint_id, pin.JointModelRZ(), M, f"joint_{i+1}")
-        parent_joint_id = joint_id
+        # 2. Define the joint's motion axis.
+        # This is a rotation around Z, with a fixed offset along Z (d_i) and a theta offset.
+        # Joint placement is defined by Trans_z(d_i) * Rot_z(theta_offset_i)
+        trans_z_d = pin.SE3(np.eye(3), np.array([0, 0, d[i]]))
+        rot_z_theta = pin.SE3(pin.rpy.rpyToMatrix(0, 0, theta_offset[i]), np.zeros(3))
+        joint_placement = current_transform * rot_z_theta * trans_z_d
+        
+        # Add the joint to the model. The joint model itself provides the Rot_z(q_i) motion.
+        joint_id = model.addJoint(0, pin.JointModelRZ(), joint_placement, f'joint_{i+1}')
 
-    # Add an end-effector frame for IK
-    # The final transformation from the last joint to the EEF
-    eef_placement = pin.SE3(pin.rpy.rpyToMatrix(alpha[5], 0, theta_offset[5]), np.array([a[5], 0, d[5]]))
-    model.addFrame(pin.Frame("end_effector", parent_joint_id, 0, eef_placement, pin.FrameType.OP_FRAME))
+    # Add an end-effector frame. It is placed relative to the last JOINT FRAME (not the last link frame).
+    # The last link's fixed transform must be applied.
+    trans_x_a_last = pin.SE3(np.eye(3), np.array([a[5], 0, 0]))
+    rot_x_alpha_last = pin.SE3(pin.rpy.rpyToMatrix(alpha[5], 0, 0), np.zeros(3))
+    eef_placement = joint_placement * trans_x_a_last * rot_x_alpha_last
+
+    model.addFrame(pin.Frame("end_effector", 0, eef_placement, pin.FrameType.OP_FRAME))
+    
+    # Rebuild data structures after model modifications
+    model.frames[-1].previousFrame = model.njoints # Link to the last joint
+    pin.crba(model, model.createData(), np.zeros(model.nv)) # Recompute CRBA to update model internals
+    pin.forwardKinematics(model,model.createData(),np.zeros(model.nv)) # Update frame placements
 
     return model
+
+# (파일의 나머지 부분은 그대로 둡니다)
 
 class PinocchioDhIkController:
     """
