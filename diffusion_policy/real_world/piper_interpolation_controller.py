@@ -377,6 +377,7 @@ class PiperInterpolationController(mp.Process):
                 # 3. Convert to pin.SE3 for IK
                 pos = target_pose_vec[:3]
                 rot_vec = target_pose_vec[3:]
+                gripper = target_pose_vec[6]
                 # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
                 rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
                 target_se3 = pin.SE3(rot, pos)
@@ -394,6 +395,11 @@ class PiperInterpolationController(mp.Process):
                     # In a real scenario, might want to stop the robot.
                     if self.verbose:
                         cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
+                
+                if gripper == 1:
+                    piper.GripperCtrl(-8, 1000, 0x03)
+                else:
+                    piper.GripperCtrl(80, 1000, 0x02)
 
                 # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad
