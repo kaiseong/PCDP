@@ -170,6 +170,7 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
         obs_align_timestamp = obs_episode['align_timestamp']
         obs_robot_timestamp = obs_episode['robot_timestamp']
         action_timestamps = action_episode['timestamp']
+        action = action_episode['action']
 
         obs_capture_timestamp = obs_episode['capture_timestamp']
 
@@ -187,14 +188,18 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
             writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'capture_time'])
             for i in range(len(obs_align_timestamp)):
                 writer.writerow([i, obs_align_timestamp[i], obs_robot_timestamp[i], obs_capture_timestamp[i]])
-        
-        action_csv=f'{episode_name}_action_dataset.csv'
+        with open(f"{episode_name}_action.csv", 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw'])
+            for i in range(len(action)):
+                writer.writerow([i, action[i][0], action[i][1], action[i][2], action[i][3], action[i][4], action[i][5]])
+        action_csv=f'{episode_name}_action_timestamp_dataset.csv'
         save_timestamp_duration_to_csv(action_timestamps, action_csv)
         point_cloud_visualize(obs_episode)
             
 
 # 사용 예시
-analyzer = EpisodeAnalyzer("/home/moai/diffusion_policy/aa/recorder_data")
+analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/aa/recorder_data")
 # summary = analyzer.get_episode_summary()
 # print(f"총 에피소드 수: {summary['total_episodes']}")
 # for detail in summary['episode_details']:
@@ -202,5 +207,5 @@ analyzer = EpisodeAnalyzer("/home/moai/diffusion_policy/aa/recorder_data")
 #           f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
 
 # 사용 예시
-obs_buffer, action_buffer = analyzer.load_episode('episode_0002')
-analyze_episode_quality(obs_buffer, action_buffer, 'episode_0002')
+obs_buffer, action_buffer = analyzer.load_episode('episode_0000')
+analyze_episode_quality(obs_buffer, action_buffer, 'episode_0000')

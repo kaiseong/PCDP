@@ -28,8 +28,7 @@ BATCH_SIZE_VIS = 32       # cfg.dataloader.batch_size 와 동일하게
 DEVICE_SCAN  = "cuda"      # scan 통계 계산용 디바이스(cpu/cuda)
 # ────────────────────────────────────────────────────────────
 
-save_align_timestamp = []
-save_action_timestamp = []
+
 def save_csv(path, data):
     """index, timestamp 형식으로 CSV 저장"""
     with open(path, "w", newline="") as f:
@@ -64,6 +63,10 @@ def main():
     pcd = o3d.geometry.PointCloud()
     """
     first_loaded = False
+    save_align_timestamp = []
+    save_action_timestamp = []
+    save_action=[]
+    save_eef=[]
 
     def load_next_sample():
         nonlocal batch, sample_idx, first_loaded
@@ -75,17 +78,19 @@ def main():
                 sample_idx = 0
 
             pts = batch['obs']['pointcloud'][sample_idx, -1].numpy()
-            eef = batch['obs']['robot_eef_pose'][sample_idx].numpy()
+            eef = batch['obs']['robot_eef_pose'][sample_idx, 0].numpy()
             align_timestamp = batch['obs']['align_timestamp'][sample_idx].numpy()
             action_timestamp = batch['action_time'][sample_idx].numpy()
+            action = batch['action'][sample_idx, 0].numpy()
 
             align_timestamp_ = batch['obs']['align_timestamp'][sample_idx].numpy()
             action_timestamp_ = batch['action_time'][sample_idx].numpy()
             save_align_timestamp.append(align_timestamp_)
             save_action_timestamp.append(action_timestamp_)
+            save_action.append(action)
+            save_eef.append(eef)
 
             
-            act = batch['action'][sample_idx].numpy()
 
             """
             xyz, rgb = pts[:, :3], pts[:, 3:]
@@ -115,6 +120,7 @@ def main():
             # print("action (16×A):\n", np.round(act, 4))
             sample_idx += 1
         except StopIteration:
+            """
             with open("debugging.csv", "w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["index", "timestamp"])
@@ -126,12 +132,26 @@ def main():
                                 save_action_timestamp[idx][9], save_action_timestamp[idx][10], save_action_timestamp[idx][11],
                                 save_action_timestamp[idx][12],save_action_timestamp[idx][13], save_action_timestamp[idx][14],
                                 save_action_timestamp[idx][15]])
-                    
-
-
-            save_csv("timestamp.csv", save_align_timestamp)
-            save_csv("action_timestamp.csv", save_action_timestamp)
-            print("✔ 모든 샘플 확인 완료!  Q 로 창을 닫아 종료하세요.")
+            """
+            with open("action_data.csv", "w", newline="") as f:
+                w = csv.writer(f
+                               )
+                w.writerow(["index", "x", "y", "z", "roll", "pitch", "yaw", "gripper"])
+                for idx, ts in enumerate(save_action):
+                    w.writerow([idx, save_action[idx][0], save_action[idx][1], save_action[idx][2], save_action[idx][3],
+                                save_action[idx][4], save_action[idx][5], save_action[idx][6]])
+            with open("eef_data.csv", "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["index", "x", "y", "z", "roll", "pitch", "yaw"])
+                for idx, ts in enumerate(save_action):
+                    w.writerow([idx, save_eef[idx][0], save_eef[idx][1], save_eef[idx][2], save_eef[idx][3],
+                                save_eef[idx][4], save_eef[idx][5]])        
+            
+            
+            # save_csv("timestamp.csv", save_align_timestamp)
+            # save_csv("action_timestamp.csv", save_action_timestamp)
+            while True:
+                print("✔ 모든 샘플 확인 완료!  Q 로 창을 닫아 종료하세요.")
             
 
     # 첫 샘플

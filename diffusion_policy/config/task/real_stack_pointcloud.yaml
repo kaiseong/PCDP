@@ -3,7 +3,7 @@ name: real_stack_pointcloud
 
 # 368640
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: aa/recorder_data
+dataset_path: cc/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -24,7 +24,7 @@ shape_meta: &shape_meta
       shape: [1]
       type: low_dim
   action: 
-    shape: [6]  # 6DOF + gripper
+    shape: [7]  # 6DOF + gripper
 
 
 env_runner:
