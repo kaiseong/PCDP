@@ -1,11 +1,11 @@
 from piper_sdk import *
 import numpy as np
-from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
-from diffusion_policy.real_world.trac_ik_controller import TracIKController
+from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
+from pcdp.real_world.trac_ik_controller import TracIKController
 import time
 import scipy.spatial.transform as st
 import pinocchio as pin
-import diffusion_policy.common.mono_time as mono_time
+import pcdp.common.mono_time as mono_time
 
 
 if __name__ == "__main__":

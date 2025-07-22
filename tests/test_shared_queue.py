@@ -7,7 +7,7 @@ os.chdir(ROOT_DIR)
 
 import numpy as np
 from multiprocessing.managers import SharedMemoryManager
-from diffusion_policy.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
+from pcdp.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
 
 
 def test():

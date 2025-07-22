@@ -9,7 +9,7 @@ from tqdm import tqdm
 import numpy as np
 import scipy.interpolate as si
 import scipy.spatial.transform as st
-from diffusion_policy.common.pose_trajectory_interpolator import (
+from pcdp.common.pose_trajectory_interpolator import (
     rotation_distance, 
     pose_distance, 
     PoseTrajectoryInterpolator)

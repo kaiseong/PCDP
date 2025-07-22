@@ -6,7 +6,7 @@ sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 
 import numpy as np
-from diffusion_policy.common.cv2_util import get_image_transform
+from pcdp.common.cv2_util import get_image_transform
 
 
 def test():

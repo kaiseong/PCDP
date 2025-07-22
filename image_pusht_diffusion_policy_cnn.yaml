@@ -1,4 +1,4 @@
-_target_: diffusion_policy.workspace.train_diffusion_unet_hybrid_workspace.TrainDiffusionUnetHybridWorkspace
+_target_: pcdp.workspace.train_diffusion_unet_hybrid_workspace.TrainDiffusionUnetHybridWorkspace
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
@@ -15,7 +15,7 @@ dataloader:
   shuffle: true
 dataset_obs_steps: 2
 ema:
-  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  _target_: pcdp.model.diffusion.ema_model.EMAModel
   inv_gamma: 1.0
   max_value: 0.9999
   min_value: 0.0
@@ -29,7 +29,7 @@ logging:
   id: null
   mode: online
   name: 2023.01.16-20.20.06_train_diffusion_unet_hybrid_pusht_image
-  project: diffusion_policy_debug
+  project: pcdp_debug
   resume: true
   tags:
   - train_diffusion_unet_hybrid
@@ -53,7 +53,7 @@ optimizer:
   weight_decay: 1.0e-06
 past_action_visible: false
 policy:
-  _target_: diffusion_policy.policy.diffusion_unet_hybrid_image_policy.DiffusionUnetHybridImagePolicy
+  _target_: pcdp.policy.diffusion_unet_hybrid_image_policy.DiffusionUnetHybridImagePolicy
   cond_predict_scale: true
   crop_shape:
   - 84
@@ -113,7 +113,7 @@ shape_meta:
       type: rgb
 task:
   dataset:
-    _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDataset
+    _target_: pcdp.dataset.pusht_image_dataset.PushTImageDataset
     horizon: 16
     max_train_episodes: 90
     pad_after: 7
@@ -122,7 +122,7 @@ task:
     val_ratio: 0.02
     zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
   env_runner:
-    _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
+    _target_: pcdp.env_runner.pusht_image_runner.PushTImageRunner
     fps: 10
     legacy_test: true
     max_steps: 300

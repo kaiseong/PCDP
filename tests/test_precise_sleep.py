@@ -7,7 +7,7 @@ os.chdir(ROOT_DIR)
 
 import time
 import numpy as np
-from diffusion_policy.common.precise_sleep import precise_sleep, precise_wait
+from pcdp.common.precise_sleep import precise_sleep, precise_wait
 
 
 def test_sleep():

@@ -6,7 +6,7 @@ sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 
 import zarr
-from diffusion_policy.common.replay_buffer import ReplayBuffer
+from pcdp.common.replay_buffer import ReplayBuffer
 
 def test():
     import numpy as np
@@ -40,15 +40,15 @@ def test():
 def test_real():
     import os
     dist_group = zarr.open(
-        os.path.expanduser('~/dev/diffusion_policy/data/pusht/pusht_cchi_v2.zarr'), 'r')
+        os.path.expanduser('~/dev/pcdp/data/pusht/pusht_cchi_v2.zarr'), 'r')
 
     buff = ReplayBuffer.create_empty_numpy()
     key, group = next(iter(dist_group.items()))
     for key, group in dist_group.items():
         buff.add_episode(group)
 
-    # out_path = os.path.expanduser('~/dev/diffusion_policy/data/pusht_cchi2_v2_replay.zarr')
-    out_path = os.path.expanduser('~/dev/diffusion_policy/data/test.zarr')
+    # out_path = os.path.expanduser('~/dev/pcdp/data/pusht_cchi2_v2_replay.zarr')
+    out_path = os.path.expanduser('~/dev/pcdp/data/test.zarr')
     out_store = zarr.DirectoryStore(out_path)
     buff.save_to_store(out_store)
 
@@ -58,5 +58,5 @@ def test_real():
 
 def test_pop():
     buff = ReplayBuffer.create_from_path(
-        '/home/chengchi/dev/diffusion_policy/data/pusht_cchi_v3_replay.zarr',
+        '/home/chengchi/dev/pcdp/data/pusht_cchi_v3_replay.zarr',
         mode='rw')

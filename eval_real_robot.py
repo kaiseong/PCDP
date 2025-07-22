@@ -33,16 +33,16 @@ import pathlib
 import skvideo.io
 from omegaconf import OmegaConf
 import scipy.spatial.transform as st
-from diffusion_policy.real_world.real_env import RealEnv
-from diffusion_policy.real_world.joypad_shared_memory import JoypadSpacemouse
-from diffusion_policy.common.precise_sleep import precise_wait
-from diffusion_policy.real_world.real_inference_util import (
+from pcdp.real_world.real_env import RealEnv
+from pcdp.real_world.joypad_shared_memory import JoypadSpacemouse
+from pcdp.common.precise_sleep import precise_wait
+from pcdp.real_world.real_inference_util import (
     get_real_obs_resolution, 
     get_real_obs_dict)
-from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
-from diffusion_policy.policy.base_image_policy import BaseImagePolicy
-from diffusion_policy.common.cv2_util import get_image_transform
+from pcdp.common.pytorch_util import dict_apply
+from pcdp.workspace.base_workspace import BaseWorkspace
+from pcdp.policy.base_image_policy import BaseImagePolicy
+from pcdp.common.cv2_util import get_image_transform
 
 import csv
 import os

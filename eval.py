@@ -1,6 +1,6 @@
 """
 Usage:
-python eval.py --checkpoint data/image/pusht/diffusion_policy_cnn/train_0/checkpoints/latest.ckpt -o data/pusht_eval_output
+python eval.py --checkpoint data/image/pusht/pcdp_cnn/train_0/checkpoints/latest.ckpt -o data/pusht_eval_output
 """
 
 import sys
@@ -16,7 +16,7 @@ import torch
 import dill
 import wandb
 import json
-from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from pcdp.workspace.base_workspace import BaseWorkspace
 
 @click.command()
 @click.option('-c', '--checkpoint', required=True)

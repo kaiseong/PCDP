@@ -5,10 +5,10 @@ ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 sys.path.append(ROOT_DIR)
 os.chdir(ROOT_DIR)
 
-from diffusion_policy.env.block_pushing.block_pushing_multimodal import BlockPushMultimodal
+from pcdp.env.block_pushing.block_pushing_multimodal import BlockPushMultimodal
 from gym.wrappers import FlattenObservation
-from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
-from diffusion_policy.gym_util.video_wrapper import VideoWrapper
+from pcdp.gym_util.multistep_wrapper import MultiStepWrapper
+from pcdp.gym_util.video_wrapper import VideoWrapper
 
 def test():
     env = MultiStepWrapper(

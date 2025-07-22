@@ -2,8 +2,8 @@ import os
 import numpy as np
 import pyorbbecsdk as ob
 import open3d as o3d
-from diffusion_policy.real_world.real_data_pc_conversion import PointCloudPreprocessor
-import diffusion_policy.common.mono_time as mono_time
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
+import pcdp.common.mono_time as mono_time
 
 def main():
     workspace = [[-10, 10], [-10, 10], [-10, 10]]
@@ -32,7 +32,8 @@ def main():
     pc_filter = ob.PointCloudFilter()
     cam_param = pipeline.get_camera_param()
     pc_filter.set_camera_param(cam_param)
-    pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
+    pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT) # Returns XYZ(mm) and RGB(0-255)
+    voxel_size = 5.0 # In mm, equivalent to 0.005m from the reference code
 
     use_vis = False
     if use_vis:
@@ -57,17 +58,29 @@ def main():
             depth, color = frames.get_depth_frame(), frames.get_color_frame()
             if depth is None or color is None:
                 continue
-            print("work")
             frame = align.process(frames)
             pc_filter.set_position_data_scaled(depth.get_depth_scale())
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
             pc=np.asarray(point_cloud) 
-            pc = pc[pc[:, 2] > 0.0] 
+            pc = pc[pc[:, 2] > 0.0] # Filter points behind the camera
 
             if cnt>200:
                 start=mono_time.now_ms()
-                process_pc = preprocessor.process(pc)
+
+                # Convert numpy array to Open3D PointCloud for voxel downsampling
+                pcd_o3d = o3d.geometry.PointCloud()
+                pcd_o3d.points = o3d.utility.Vector3dVector(pc[:, :3]) # XYZ in mm
+                pcd_o3d.colors = o3d.utility.Vector3dVector(pc[:, 3:6] / 255.0) # RGB normalized to 0-1
+
+                # Apply voxel downsampling
+                pcd_downsampled = pcd_o3d.voxel_down_sample(voxel_size)
+                # Convert back to numpy array (XYZRGB)
+                points_downsampled = np.asarray(pcd_downsampled.points)
+                colors_downsampled = np.asarray(pcd_downsampled.colors) * 255.0 # Scale back to 0-255
+                pc_downsampled_np = np.hstack((points_downsampled, colors_downsampled)).astype(np.float32)
+                # process_pc = preprocessor.process(pc_downsampled_np)
                 durations = np.append(durations, mono_time.now_ms() - start)
+                
             # print(f"preprocess_pc shape: {process_pc.shape}")
 
 

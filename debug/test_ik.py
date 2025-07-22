@@ -1,12 +1,12 @@
 from piper_sdk import *
 import numpy as np
-from diffusion_policy.real_world.pinocchio_ik_controller import PinocchioIKController
-from diffusion_policy.real_world.trac_ik_controller import TracIKController
-from diffusion_policy.real_world.pinocchio_dh_ik_controller import PinocchioDhIkController
+from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
+from pcdp.real_world.trac_ik_controller import TracIKController
+from pcdp.real_world.pinocchio_dh_ik_controller import PinocchioDhIkController
 import time
 import scipy.spatial.transform as st
 import pinocchio as pin
-import diffusion_policy.common.mono_time as mono_time
+import pcdp.common.mono_time as mono_time
 
 
 if __name__ == "__main__":
@@ -19,13 +19,13 @@ if __name__ == "__main__":
     try:
         
         ik_controller = PinocchioIKController(
-            urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
-            mesh_dir="/home/moai/diffusion_policy",
+            urdf_path="/home/moai/pcdp/debug/piper_no_gripper_description.urdf",
+            mesh_dir="/home/moai/pcdp",
             ee_link_name="link6",
         )
         """
         ik_controller = TracIKController(
-            urdf_path="/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf",
+            urdf_path="/home/moai/pcdp/debug/piper_no_gripper_description.urdf",
             ee_link_name="link6",
             base_link_name="base_link",
             solve_type="Speed",

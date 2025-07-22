@@ -24,11 +24,11 @@ import open3d as o3d
 import numpy as np
 from termcolor import cprint
 import scipy.spatial.transform as st
-from diffusion_policy.real_world.real_env_piper import RealEnv
-from diffusion_policy.real_world.teleoperation_piper import TeleoperationPiper
-from diffusion_policy.common.precise_sleep import precise_wait
-import diffusion_policy.common.mono_time as mono_time
-from diffusion_policy.real_world.keystroke_counter import (
+from pcdp.real_world.real_env_piper import RealEnv
+from pcdp.real_world.teleoperation_piper import TeleoperationPiper
+from pcdp.common.precise_sleep import precise_wait
+import pcdp.common.mono_time as mono_time
+from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
 
@@ -42,8 +42,8 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
     dt = 1/frequency
     
     # IK parameters
-    urdf_path = "/home/moai/diffusion_policy/debug/piper_no_gripper_description.urdf"
-    mesh_dir = "/home/moai/diffusion_policy"
+    urdf_path = "/home/moai/pcdp/debug/piper_no_gripper_description.urdf"
+    mesh_dir = "/home/moai/pcdp"
     ee_link_name = "link6"
     joints_to_lock_names = [] # No joints to lock in the no-gripper URDF
 

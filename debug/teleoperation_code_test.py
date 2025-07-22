@@ -6,7 +6,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 import time
-from diffusion_policy.real_world.teleoperation_piper import TeleoperationPiper
+from pcdp.real_world.teleoperation_piper import TeleoperationPiper
 from multiprocessing.managers import SharedMemoryManager
 
 def main():

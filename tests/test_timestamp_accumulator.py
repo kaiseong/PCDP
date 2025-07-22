@@ -7,7 +7,7 @@ os.chdir(ROOT_DIR)
 
 import numpy as np
 import time
-from diffusion_policy.common.timestamp_accumulator import (
+from pcdp.common.timestamp_accumulator import (
     get_accumulate_timestamp_idxs,
     TimestampObsAccumulator,
     TimestampActionAccumulator

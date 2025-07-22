@@ -9,7 +9,7 @@ import time
 import numpy as np
 import multiprocessing as mp
 from multiprocessing.managers import SharedMemoryManager
-from diffusion_policy.shared_memory.shared_memory_ring_buffer import (
+from pcdp.shared_memory.shared_memory_ring_buffer import (
     SharedMemoryRingBuffer,
     SharedAtomicCounter)
 
