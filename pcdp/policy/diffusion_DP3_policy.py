@@ -10,7 +10,7 @@ from termcolor import cprint
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from pcdp.model.common.normalizer import LinearNormalizer
 from pcdp.policy.base_pointcloud_policy import BasePointCloudPolicy
-from pcdp.model.diffusion.dp3_conditional_unet1d import DP3ConditionalUnet1D
+from pcdp.model.diffusion.DP3_conditional_unet1d import DP3ConditionalUnet1D
 from pcdp.model.diffusion.mask_generator import LowdimMaskGenerator
 from pcdp.model.vision.pointnet_extractor import DP3Encoder
 from pcdp.common.pytorch_util import dict_apply

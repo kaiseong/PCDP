@@ -165,6 +165,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
 
     
     def _validate_replay_buffer_keys(self, replay_buffer: ReplayBuffer, pointcloud_keys: List[str], lowdim_keys: List[str]):
+
         """
         Validate that replay buffer contains all expected keys from shape_meta.
         
@@ -173,6 +174,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             pointcloud_keys: Expected pointcloud keys
             lowdim_keys: Expected lowdim keys
         """
+        
         buffer_keys = set(replay_buffer.keys())
         
         # Check pointcloud keys

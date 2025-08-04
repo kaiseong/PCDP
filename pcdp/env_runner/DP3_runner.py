@@ -1,7 +1,7 @@
 from pcdp.policy.base_pointcloud_policy import BasePointCloudPolicy
 from pcdp.env_runner.base_pointcloud_runner import BasePointCloudRunner
 
-class RealStackPointCloudRunner(BasePointCloudRunner):
+class DP3PointCloudRunner(BasePointCloudRunner):
     def __init__(self, output_dir):
         super().__init__(output_dir)
     

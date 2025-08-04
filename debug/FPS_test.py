@@ -19,7 +19,7 @@ def main():
     pipeline = ob.Pipeline()
     cfg = ob.Config()
     depth_profile = pipeline.get_stream_profile_list(ob.OBSensorType.DEPTH_SENSOR)\
-                    .get_video_stream_profile(640, 576, ob.OBFormat.Y16, 30)
+                    .get_video_stream_profile(320, 288, ob.OBFormat.Y16, 30)
     color_profile = pipeline.get_stream_profile_list(ob.OBSensorType.COLOR_SENSOR)\
                     .get_video_stream_profile(1280, 720, ob.OBFormat.RGB, 30)
     cfg.enable_stream(depth_profile)
@@ -32,8 +32,8 @@ def main():
     pc_filter = ob.PointCloudFilter()
     cam_param = pipeline.get_camera_param()
     pc_filter.set_camera_param(cam_param)
-    pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT) # Returns XYZ(mm) and RGB(0-255)
-    voxel_size = 5.0 # In mm, equivalent to 0.005m from the reference code
+    pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
+    voxel_size = 0.005
 
     use_vis = False
     if use_vis:
@@ -49,6 +49,7 @@ def main():
     
     durations = np.array([])
     cnt = 0
+    t_cnt=0
     try:
         while cnt<500:
             frames = pipeline.wait_for_frames(1)
@@ -62,28 +63,17 @@ def main():
             pc_filter.set_position_data_scaled(depth.get_depth_scale())
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
             pc=np.asarray(point_cloud) 
-            pc = pc[pc[:, 2] > 0.0] # Filter points behind the camera
+            pc = pc[pc[:, 2] > 0.0]
+            mean_z = pc[:,2].mean()
 
             if cnt>200:
                 start=mono_time.now_ms()
-
-                # Convert numpy array to Open3D PointCloud for voxel downsampling
-                pcd_o3d = o3d.geometry.PointCloud()
-                pcd_o3d.points = o3d.utility.Vector3dVector(pc[:, :3]) # XYZ in mm
-                pcd_o3d.colors = o3d.utility.Vector3dVector(pc[:, 3:6] / 255.0) # RGB normalized to 0-1
-
-                # Apply voxel downsampling
-                pcd_downsampled = pcd_o3d.voxel_down_sample(voxel_size)
-                # Convert back to numpy array (XYZRGB)
-                points_downsampled = np.asarray(pcd_downsampled.points)
-                colors_downsampled = np.asarray(pcd_downsampled.colors) * 255.0 # Scale back to 0-255
-                pc_downsampled_np = np.hstack((points_downsampled, colors_downsampled)).astype(np.float32)
-                # process_pc = preprocessor.process(pc_downsampled_np)
-                durations = np.append(durations, mono_time.now_ms() - start)
-                
+                process_pc = preprocessor.process(pc)
+                tim= mono_time.now_ms() - start
+                if tim>50.0:
+                    t_cnt+=1
+                durations = np.append(durations, tim)
             # print(f"preprocess_pc shape: {process_pc.shape}")
-
-
             # vis
             if use_vis:
                 vis_pc = np.asarray(point_cloud, dtype =np.float32)
@@ -111,6 +101,7 @@ def main():
             mean: {durations.mean()}\n \
             max: {durations.max()}\n \
             min: {durations.min()}")
+        print(f"t_cnt: {t_cnt}")
         pipeline.stop()
 
 if __name__ == '__main__':

@@ -1,8 +1,8 @@
 defaults:
   - task: real_stack_pointcloud
 
-name: train_diffusion_unet_dp3
-_target_: pcdp.workspace.train_diffusion_unet_dp3_workspace.TrainDP3Workspace
+name: train_diffusion_DP3
+_target_: pcdp.workspace.train_diffusion_DP3_workspace.TrainDP3Workspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: pcdp.policy.diffusion_unet_dp3_policy.DP3Policy
+  _target_: pcdp.policy.diffusion_DP3_policy.DP3Policy
   use_point_crop: true
   condition_type: film
   use_down_condition: true
@@ -84,6 +84,7 @@ dataloader:
   shuffle: True
   pin_memory: True
   persistent_workers: False
+
 
 val_dataloader:
   batch_size: 128

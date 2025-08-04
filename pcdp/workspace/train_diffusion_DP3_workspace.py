@@ -24,7 +24,7 @@ import shutil
 
 from termcolor import cprint
 from pcdp.workspace.base_workspace import BaseWorkspace
-from pcdp.policy.diffusion_unet_dp3_policy import DP3Policy
+from pcdp.policy.diffusion_DP3_policy import DP3Policy
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.env_runner.base_pointcloud_runner import BasePointCloudRunner 
 import pcdp.common.mono_time as mono_time

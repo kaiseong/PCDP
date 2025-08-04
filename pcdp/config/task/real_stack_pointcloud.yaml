@@ -3,7 +3,7 @@ name: real_stack_pointcloud
 
 # 368640
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB
-dataset_path: cc/recorder_data
+dataset_path: data/stack_data/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -28,7 +28,7 @@ shape_meta: &shape_meta
 
 
 env_runner:
-  _target_: pcdp.env_runner.real_stack_pointcloud_runner.RealStackPointCloudRunner
+  _target_: pcdp.env_runner.DP3_runner.DP3PointCloudRunner
 
 dataset:
   _target_: pcdp.dataset.real_stack_pc_dataset.RealStackPointCloudDataset

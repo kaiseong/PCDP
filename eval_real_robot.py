@@ -33,8 +33,8 @@ import pathlib
 import skvideo.io
 from omegaconf import OmegaConf
 import scipy.spatial.transform as st
-from pcdp.real_world.real_env import RealEnv
-from pcdp.real_world.joypad_shared_memory import JoypadSpacemouse
+from pcdp.real_world.real_env_piper import RealEnv
+from pcdp.real_world.teleoperation_piper import TeleoperationPiper
 from pcdp.common.precise_sleep import precise_wait
 from pcdp.real_world.real_inference_util import (
     get_real_obs_resolution, 
@@ -52,17 +52,15 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
 @click.option('--output', '-o', required=True, help='Directory to save recording')
-@click.option('--robot_ip', '-ri', required=True, help="UR5's IP address e.g. 192.168.0.204")
 @click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')
 @click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode from the match dataset')
-@click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")
 @click.option('--max_duration', '-md', default=60, help='Max duration for each epoch in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
-def main(input, output, robot_ip, match_dataset, match_episode,
-    vis_camera_idx, init_joints, 
+def main(input, output, match_dataset, match_episode,
+    init_joints, 
     steps_per_inference, max_duration,
     frequency, command_latency):
     # load match_dataset
