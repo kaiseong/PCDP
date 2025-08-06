@@ -2,7 +2,7 @@ import torch.nn as nn
 
 from MinkowskiEngine import MinkowskiReLU
 
-from policy.minkowski.common import ConvType, NormType, get_norm, conv
+from pcdp.model.minkowski.common import ConvType, NormType, get_norm, conv
 
 
 class BasicBlockBase(nn.Module):

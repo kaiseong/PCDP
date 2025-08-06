@@ -86,6 +86,9 @@ class TrainRISEWorkspace(BaseWorkspace):
         assert isinstance(dataset, BasePointCloudDataset)
         dataloader = DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
 
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+
         # env runner
         env_runner: BasePointCloudRunner = hydra.utils.instantiate(
             cfg.task.env_runner, 
@@ -134,6 +137,7 @@ class TrainRISEWorkspace(BaseWorkspace):
                 cloud_feats = data['input_feats_list'].to(device)
                 action_data = data['action_normalized'].to(device)
                 
+                
                 # forward
                 cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
                 loss = self.model(cloud_data, action_data, batch_size=action_data.shape[0])
@@ -164,6 +168,21 @@ class TrainRISEWorkspace(BaseWorkspace):
                 'train_loss_epoch': avg_loss_epoch,
                 'epoch': self.epoch
             }
+            if (self.epoch + 1) % cfg.training.validation_every == 0 and len(val_dataloader) >0:
+                self.model.eval()
+                val_loss = 0
+                with torch.no_grad():
+                    for data in val_dataloader:
+                        # data to device
+                        cloud_coords = data['input_coords_list'].to(device)
+                        cloud_feats = data['input_feats_list'].to(device)
+                        action_data = data['action_normalized'].to(device)
+                        cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
+                        loss = self.model(cloud_data, action_data,batch_size=action_data.shape[0])
+                        val_loss += loss.item()
+                val_loss /= len(val_dataloader)
+                epoch_log['val_loss_epoch'] = val_loss
+                self.model.train()
 
             # run rollout
             if (self.epoch + 1) % cfg.training.rollout_every == 0:

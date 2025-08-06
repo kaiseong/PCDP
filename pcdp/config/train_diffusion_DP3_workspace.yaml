@@ -1,5 +1,5 @@
 defaults:
-  - task: real_stack_pointcloud
+  - task: DP3_stack
 
 name: train_diffusion_DP3
 _target_: pcdp.workspace.train_diffusion_DP3_workspace.TrainDP3Workspace

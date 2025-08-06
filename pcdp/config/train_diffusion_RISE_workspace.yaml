@@ -1,5 +1,5 @@
 defaults:
-  - task: real_stack_pointcloud
+  - task: RISE_stack
 
 name: train_diffusion_RISE
 _target_: pcdp.workspace.train_diffusion_RISE_workspace.TrainRISEWorkspace
@@ -10,7 +10,7 @@ exp_name: "debug"
 policy:
   _target_: pcdp.policy.diffusion_RISE_policy.RISEPolicy
   num_action: 20
-  input_dim: 6 
+  input_dim: 6
   obs_feature_dim: 512
   hidden_dim: 512
   nheads: 8
@@ -27,10 +27,16 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 128
-  num_workers: 8
+  batch_size: 8
+  num_workers: 16
   shuffle: True
   drop_last: True
+
+val_dataloader:
+  batch_size: 8
+  num_workers: 16
+  shuffle: False
+  drop_last: False
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -41,21 +47,22 @@ optimizer:
 
 training:
   device: "cuda:0"
-  seed: 42
+  seed: 233
   debug: True
   resume: True
   lr_warmup_steps: 2000
-  num_epochs: 3000
+  num_epochs: 1000
   use_ema: False
-  rollout_every: 200
+  rollout_every: 10
   save_epochs: 50
   tqdm_interval_sec: 1.0
+  validation_every: 10
 
 logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: ${training.seed}
+  name: "seed-${training.seed}"
   project: rise
   resume: true
   tags:

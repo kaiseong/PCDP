@@ -1,5 +1,5 @@
-# real_stack_pointcloud.yaml
-name: real_stack_pointcloud
+# DP3_stack.yaml
+name: DP3_stack
 
 # 368640
 pointcloud_shape: [368640, 6]  # max_points, XYZRGB

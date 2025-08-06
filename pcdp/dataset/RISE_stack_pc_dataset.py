@@ -24,6 +24,7 @@ from pcdp.common.replay_buffer import ReplayBuffer
 from pcdp.real_world.real_data_pc_conversion import _get_replay_buffer, PointCloudPreprocessor
 from pcdp.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
+from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 
 # Assuming these util/transformation files are created by the user
 from pcdp.dataset.RISE_util import *
@@ -40,6 +41,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             n_latency_steps=0,
             use_cache=True,
             seed=42,
+            voxel_size=0.005,
             val_ratio=0.0,
             max_train_episodes=None,
             enable_preprocessing=True,
@@ -53,7 +55,6 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             aug_jitter=False,
             aug_jitter_params=None,
             aug_jitter_prob=0.2,
-            voxel_size=0.005,
             split='train'
         ):
 
@@ -107,23 +108,29 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             val_ratio=val_ratio,
             seed=seed)
         train_mask = ~val_mask
-        train_mask = downsample_mask(
-            mask=train_mask, 
-            max_n=max_train_episodes, 
-            seed=seed)
+
+        if max_train_episodes is not None:
+            train_mask = downsample_mask(
+                mask=train_mask, 
+                max_n=max_train_episodes, 
+                seed=seed)
+        
+        episode_mask = train_mask if split =='train' else val_mask
 
         self.sampler = SequenceSampler(
             replay_buffer=replay_buffer, 
             sequence_length=horizon+n_latency_steps,
             pad_before=pad_before, 
             pad_after=pad_after,
-            episode_mask=train_mask)
+            episode_mask=episode_mask)
         
         self.replay_buffer = replay_buffer
         self.shape_meta = shape_meta
         self.pointcloud_keys = pointcloud_keys
         self.lowdim_keys = lowdim_keys
         self.n_obs_steps = n_obs_steps
+        self.pad_before = pad_before
+        self.pad_after = pad_after
         self.val_mask = val_mask
         self.horizon = horizon
         # =======================================================
@@ -140,6 +147,19 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         self.voxel_size = voxel_size
         self.split = split
         self.n_latency_steps = n_latency_steps
+    
+    def get_validation_dataset(self):
+        val_set = copy.copy(self)
+        val_set.sampler =SequenceSampler(
+            replay_buffer=self.replay_buffer,
+            sequence_length=self.horizon,
+            pad_before=self.pad_before,
+            pad_after=self.pad_after,
+            episode_mask=self.val_mask
+        )
+        val_set.val_mask = self.val_mask
+        val_set.split = 'val'
+        return val_set
 
     def _augmentation(self, clouds, tcps_euler):
         # To correctly augment, we should convert euler to a rotation matrix/quaternion,
@@ -173,8 +193,14 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         # This needs to be robust to the input shape.
         tcp_list[:, :3] = (tcp_list[:, :3] - TRANS_MIN) / (TRANS_MAX - TRANS_MIN) * 2 - 1
         # Normalize gripper which is the last element
-        tcp_list[:, -1] = tcp_list[:, -1] / MAX_GRIPPER_WIDTH * 2 - 1
+        # The user's dataset uses binary gripper values (0 for closed, 1 for open).
+        # Map 0 to -1 and 1 to 1.
+        tcp_list[:, -1] = tcp_list[:, -1] * 2 - 1
         return tcp_list
+
+    def __len__(self):
+        return len(self.sampler)
+    
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         threadpool_limits(1)
@@ -207,7 +233,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
                 jittered_img = jitter(pil_img)
                 jittered_colors = np.array(jittered_img).reshape(-1, 3) / 255.0
                 clouds[i][:, 3:] = jittered_colors.astype(np.float32)
-
+        
         # Normalize colors
         for i in range(len(clouds)):
             clouds[i][:, 3:] = (clouds[i][:, 3:] - IMG_MEAN) / IMG_STD
@@ -218,10 +244,14 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
 
         # =========== 2. MODIFIED: Action Representation Conversion ===========
         # Convert action from Euler angles to 6D representation for the policy
-        actions_6d = xyz_rot_transform(actions_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
+        pose_euler = actions_euler[:, :6]
+        gripper_action = actions_euler[:, 6:]
+
+        pose_6d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
         
+        actions_7d = np.concatenate([pose_6d, gripper_action], axis=-1)
         # Normalize actions
-        actions_normalized = self._normalize_tcp(actions_6d.copy())
+        actions_normalized = self._normalize_tcp(actions_7d.copy())
 
         # Voxelize for MinkowskiEngine
         input_coords_list = []
@@ -234,7 +264,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         return {
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
-            'action': torch.from_numpy(actions_6d).float(),
+            'action': torch.from_numpy(actions_7d).float(),
             'action_normalized': torch.from_numpy(actions_normalized).float()
         }
 

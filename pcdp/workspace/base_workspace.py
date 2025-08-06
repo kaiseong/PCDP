@@ -80,7 +80,7 @@ class BaseWorkspace:
             # the checkpoints are saved as format: epoch={}-test_mean_score={}.ckpt
             # find the best checkpoint
             checkpoint_dir = pathlib.Path(self.output_dir).joinpath('checkpoints')
-            all_checkpoints = os.listidr(checkpoint_dir)
+            all_checkpoints = os.listdir(checkpoint_dir)
             best_ckpt = None
             best_score = -1e10
             for ckpt in all_checkpoints:
