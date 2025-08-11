@@ -4,11 +4,6 @@ import numpy as np
 import scipy.interpolate as si
 import scipy.spatial.transform as st
 
-##### user code #####
-import csv
-import sys
-#####################
-
 
 def pose_distance(start_pose, end_pose):
     start_pose = np.array(start_pose)
@@ -19,7 +14,7 @@ def pose_distance(start_pose, end_pose):
     return pos_dist
 
 class PoseTrajectoryInterpolator:
-    def __init__(self, times: np.ndarray, poses: np.ndarray, logger=None):
+    def __init__(self, times: np.ndarray, poses: np.ndarray):
         assert len(times) >= 1
         assert len(poses) == len(times)
         if not isinstance(times, np.ndarray):
@@ -27,11 +22,13 @@ class PoseTrajectoryInterpolator:
         if not isinstance(poses, np.ndarray):
             poses = np.array(poses)
 
+        self._times = times
+        self._poses = poses
+
         if len(times) == 1:
             # special treatment for single step interpolation
             self.single_step = True
-            self._times = times
-            self._poses = poses
+            self.pos_interp = None
         else:
             self.single_step = False
             assert np.all(times[1:] >= times[:-1])
@@ -41,26 +38,14 @@ class PoseTrajectoryInterpolator:
             self.pos_interp = si.interp1d(times, pos, 
                 axis=0, assume_sorted=True)
             
-        ##### user code #####
-        self.logger = logger
-        #####################
     
     @property
     def times(self) -> np.ndarray:
-        if self.single_step:
-            return self._times
-        else:
-            return self.pos_interp.x
+        return self._times
     
     @property
     def poses(self) -> np.ndarray:
-        if self.single_step:
-            return self._poses
-        else:
-            n = len(self.times)
-            poses = np.zeros((n, 6))
-            poses[:,:3] = self.pos_interp.y
-            return poses
+        return self._poses
 
     def trim(self, 
             start_t: float, end_t: float
@@ -119,16 +104,6 @@ class PoseTrajectoryInterpolator:
         end_time = self.times[-1]
         assert start_time <= end_time
 
-        ##### user code #####
-        if self.logger:
-            self.logger.writerow(["", "", f"times: {self.times}"])
-            self.logger.writerow(["", "", f"raw_start_time: {start_time}"])
-            self.logger.writerow(["", "", f"raw_end_time: {end_time}"])
-            self.logger.writerow(["", "", f"raw_time: {time}"])
-            self.logger.writerow(["", "", f"curr_time: {curr_time}"])
-            self.logger.writerow(["", "", f"last_waypoint_time: {last_waypoint_time}"])
-        #####################
-
         if curr_time is not None:
             if time <= curr_time:
                 # if insert time is earlier than current time
@@ -146,9 +121,6 @@ class PoseTrajectoryInterpolator:
                     end_time = max(last_waypoint_time, curr_time)
             else:
                 end_time = curr_time
-        if self.logger:
-            self.logger.writerow(["", "", f"sec_start_time: {start_time}"])
-            self.logger.writerow(["", "", f"sec_end_time: {end_time}"])
         
 
         end_time = min(end_time, time)
@@ -184,7 +156,7 @@ class PoseTrajectoryInterpolator:
         # determine speed
         duration = time - end_time
         end_pose = trimmed_interp(end_time)
-        pos_dist, rot_dist = pose_distance(pose, end_pose)
+        pos_dist = pose_distance(pose, end_pose)
         pos_min_duration = pos_dist / max_pos_speed
         duration = max(duration, pos_min_duration)
         assert duration >= 0
@@ -195,16 +167,8 @@ class PoseTrajectoryInterpolator:
         poses = np.append(trimmed_interp.poses, [pose], axis=0)
 
         # create new interpolator
-        final_interp = PoseTrajectoryInterpolator(times, poses, logger=self.logger)
-        ##### user code #####
-        if self.logger:
-            self.logger.writerow(["", "", f"final_paraeter"])
-            self.logger.writerow(["", "", "", f"trimmed_interp.times: {trimmed_interp.times}"])
-            self.logger.writerow(["", "", "", f"trimmed_interp.poses: {trimmed_interp.poses}"])
-            self.logger.writerow(["", "", "", f"duration: {duration}"])
-            self.logger.writerow(["", "", "", f"new_times: {times}"])
-            self.logger.writerow(["", "", "", f"new_poses: {poses}"])
-        #####################
+        final_interp = PoseTrajectoryInterpolator(times, poses)
+
         return final_interp
 
 
@@ -214,16 +178,31 @@ class PoseTrajectoryInterpolator:
             is_single = True
             t = np.array([t])
         
-        pose = np.zeros((len(t), 6))
         if self.single_step:
-            pose[:] = self._poses[0]
+            # If there is only one waypoint, repeat its pose for all requested times.
+            pose = np.tile(self._poses[0], (len(t), 1))
         else:
-            start_time = self.times[0]
-            end_time = self.times[-1]
-            t = np.clip(t, start_time, end_time)
+            start_time = self._times[0]
+            end_time = self._times[-1]
+            # Clip time to be within the defined range of waypoints.
+            t_clipped = np.clip(t, start_time, end_time)
 
-            pose = np.zeros((len(t), 6))
-            pose[:,:3] = self.pos_interp(t)
+            # Interpolate position using the pre-built interpolator.
+            interp_pos = self.pos_interp(t_clipped)
+
+            # For each time t, find the index of the immediately preceding waypoint.
+            indices = np.searchsorted(self._times, t_clipped, side='right') - 1
+            indices = np.maximum(0, indices)
+
+            # Get the full poses of these preceding waypoints.
+            last_poses = self._poses[indices]
+
+            # Assemble the final pose.
+            pose = np.zeros((len(t), 7))
+            # Use the interpolated position.
+            pose[:, :3] = interp_pos
+            # Use the non-interpolated rotation and gripper from the last waypoint.
+            pose[:, 3:] = last_poses[:, 3:]
 
         if is_single:
             pose = pose[0]

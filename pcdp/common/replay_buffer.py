@@ -445,7 +445,8 @@ class ReplayBuffer:
     def add_episode(self, 
             data: Dict[str, np.ndarray], 
             chunks: Optional[Dict[str,tuple]]=dict(),
-            compressors: Union[str, numcodecs.abc.Codec, dict]=dict()):
+            compressors: Union[str, numcodecs.abc.Codec, dict]=dict(),
+            object_codecs: Optional[Dict[str, numcodecs.abc.Codec]]=dict()):
         assert(len(data) > 0)
         is_zarr = (self.backend == 'zarr')
 
@@ -468,11 +469,20 @@ class ReplayBuffer:
                         chunks=chunks, key=key, array=value)
                     cpr = self._resolve_array_compressor(
                         compressors=compressors, key=key, array=value)
-                    arr = self.data.zeros(name=key, 
+                    
+                    kwargs = dict(
+                        name=key, 
                         shape=new_shape, 
                         chunks=cks,
                         dtype=value.dtype,
-                        compressor=cpr)
+                        compressor=cpr
+                    )
+                    if value.dtype == object:
+                        codec = object_codecs.get(key, None)
+                        if codec is None:
+                            raise ValueError(f"object_codec must be specified for object array {key}")
+                        kwargs['object_codec'] = codec
+                    arr = self.data.zeros(**kwargs)
                 else:
                     # copy data to prevent modify
                     arr = np.zeros(shape=new_shape, dtype=value.dtype)

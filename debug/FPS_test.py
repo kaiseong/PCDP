@@ -31,6 +31,7 @@ def main():
     align = ob.AlignFilter(align_to_stream = ob.OBStreamType.DEPTH_STREAM)
     pc_filter = ob.PointCloudFilter()
     cam_param = pipeline.get_camera_param()
+    print(f"camera_praram: {cam_param}")
     pc_filter.set_camera_param(cam_param)
     pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
     voxel_size = 0.005

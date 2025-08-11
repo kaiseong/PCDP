@@ -13,10 +13,10 @@ from piper_sdk import *
 from pcdp.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from pcdp.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from pcdp.common.only_pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import pcdp.common.mono_time as mono_time
 from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
-from pcdp.real_world.trac_ik_controller import TracIKController
+# from pcdp.real_world.trac_ik_controller import TracIKController
 from termcolor import cprint
 
 
@@ -248,6 +248,9 @@ class PiperInterpolationController(mp.Process):
         try:
             piper = C_PiperInterface_V2("can_slave")
             piper.ConnectPort()
+            piper.SetSDKJointLimitParam('j4', -1.7977, 1.7977)
+            piper.SetSDKJointLimitParam('j5', -1.3265, 1.3265)
+            piper.SetSDKJointLimitParam('j6', -2.0071, 2.2166)
         except Exception as e:
             cprint(f"[Piper_Controller] Failed to connect to Piper: {e}", "magenta", attrs=["bold"])
             self.ready_event.set()
@@ -298,7 +301,7 @@ class PiperInterpolationController(mp.Process):
             
             # init pose
             if self.joints_init is not None:
-                piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
+                piper.MotionCtrl_2(0x01, 0x01, 50, 0x00)
                 piper.JointCtrl(self._rad_to_sdk_joint(self.joints_init))
             
             # main loop
@@ -374,13 +377,13 @@ class PiperInterpolationController(mp.Process):
                 
                 # 4. Calculate IK using the most recent joint state
                 if self.mode == "EndPose":
-                    piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
+                    piper.MotionCtrl_2(0x01, 0x00, 50, 0x00)
                     piper.EndPoseCtrl(target)
                 else:
                     target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
                     
                     if target_joints is not None:
-                        piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
+                        piper.MotionCtrl_2(0x01, 0x01, 50, 0x00) # Using a moderate speed
                         piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
                     else:
                         if self.verbose:
