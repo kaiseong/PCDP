@@ -27,14 +27,15 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 120
-  num_workers: 16
+  batch_size: 150
+  num_workers: 23
   shuffle: True
-  drop_last: True
+  pin_memory: True
+  drop_last: False
 
 val_dataloader:
-  batch_size: 120
-  num_workers: 16
+  batch_size: 150
+  num_workers: 23
   shuffle: False
   drop_last: False
 
@@ -53,10 +54,10 @@ training:
   lr_warmup_steps: 2000
   num_epochs: 1000
   use_ema: False
-  rollout_every: 10
-  save_epochs: 50
+  rollout_every: 5
+  save_epochs: 5
   tqdm_interval_sec: 1.0
-  validation_every: 10
+  validation_every: 5
 
 logging:
   group: ${exp_name}

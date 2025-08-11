@@ -55,7 +55,7 @@ def main():
 
     # 3) DataLoader (시각화용)
     dl = DataLoader(ds, batch_size=BATCH_SIZE_VIS,
-                    num_workers=0, shuffle=False, collate_fn=collate_fn)
+                    num_workers=10, shuffle=False, collate_fn=collate_fn)
     batch_iter = iter(dl)
     batch = None
     sample_idx = 0
@@ -65,7 +65,7 @@ def main():
     vis.create_window("RISE Dataset inspector", 1280, 720, visible=True)
     opt = vis.get_render_option()
     opt.point_size = 2.0
-    opt.background_color = np.array([0.1, 0.1, 0.1])
+    opt.background_color = np.array([0, 0, 0])
     pcd = o3d.geometry.PointCloud()
     
     first_loaded = False
@@ -92,18 +92,17 @@ def main():
                     load_next_sample() # 다음 배치 시도
                 return
 
-            pts = feats[point_indices].numpy()
-            pc = preprocess(pts)
+            pc = feats[point_indices].numpy()
             
-            print(f"\n[Sample {sample_idx}] Original point count: {len(pts)}")
+            print(f"\n[Sample {sample_idx}] Original point count: {len(pc)}")
 
             # feats: [x, y, z, r, g, b, ...]
             xyz, rgb = pc[:, :3], pc[:, 3:6]
 
             # 색상 정규화 해제 (dataset에서 (x - mean) / std 했으므로)
             # RISE_stack_pc_dataset.py 참조
-            IMG_MEAN = np.array([0.5, 0.5, 0.5])
-            IMG_STD = np.array([0.5, 0.5, 0.5])
+            IMG_MEAN = np.array([0.0217, 0.0217, 0.0217])
+            IMG_STD = np.array([0.1474, 0.1474, 0.1474])
             rgb = rgb * IMG_STD + IMG_MEAN
             rgb = np.clip(rgb, 0, 1)
 

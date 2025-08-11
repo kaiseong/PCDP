@@ -236,6 +236,8 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         
         # Normalize colors
         for i in range(len(clouds)):
+            clouds[i][:, 3:] = clouds[i][:, 3:] / 255.0
+        for i in range(len(clouds)):
             clouds[i][:, 3:] = (clouds[i][:, 3:] - IMG_MEAN) / IMG_STD
 
         # Point cloud augmentation
