@@ -3,7 +3,7 @@ name: RISE_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/stack_data/recorder_data
+dataset_path: data/real_stack/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -39,7 +39,7 @@ dataset:
   use_cache: True
   voxel_size: 0.005
   seed: 233
-  val_ratio: 0.1
+  val_ratio: 0.15
   max_train_episodes: null
   aug: False
   aug_trans_min: [-0.2, -0.2, -0.2]

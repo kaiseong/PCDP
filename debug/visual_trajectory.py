@@ -6,7 +6,7 @@ from scipy.spatial.transform import Rotation as R
 
 # Load the data
 try:
-    df = pd.read_csv('action_data.csv')
+    df = pd.read_csv('RISE_action_data.csv')
 except FileNotFoundError:
     print("eef_data.csv not found. Make sure the file is in the same directory as the script.")
     exit()

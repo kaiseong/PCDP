@@ -23,7 +23,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 # ────────────────────────────────────────────────────────────
 # 설정 – 프로젝트에 맞게 YAML 경로/이름만 바꿔 주세요
 CONFIG_DIR  = "../pcdp/config"    # your yaml folder
-CONFIG_NAME = "train_diffusion_RISE_workspace"
+CONFIG_NAME = "train_diffusion_DP3_workspace"
 SAMPLE_LIMIT = 1000       # 사전 검사 시 최대 스캔 샘플 수 (None = 전부)
 BATCH_SIZE_VIS = 32       # cfg.dataloader.batch_size 와 동일하게
 DEVICE_SCAN  = "cuda"      # scan 통계 계산용 디바이스(cpu/cuda)

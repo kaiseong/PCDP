@@ -19,8 +19,26 @@ from pathlib import Path
 import open3d as o3d
 from pcdp.common.replay_buffer import ReplayBuffer
 import time
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 
 import csv
+
+
+
+camera_to_base = np.array([
+                [ 0.0,        -0.9063,      0.4226,    0.110],
+                [ -1.0,        0.,          0.,          0.],
+                [0.0,          -0.4226,      -0.9063,     0.510       ],
+                [ 0.,          0.,          0.,          1.         ]
+            ])
+
+workspace_bounds = np.array([
+    [0.100, 0.800],    # X range (milli meters)
+    [-0.400, 0.400],    # Y range (milli meters)
+    [-0.100, 0.350]     # Z range (milli meters)
+])
+
+
 def save_timestamp_duration_to_csv(timestamps, filename):
     """타임스탬프 배열을 CSV 파일로 저장"""
     with open(filename, 'w', newline='') as csvfile:
@@ -94,6 +112,10 @@ def point_cloud_visualize(obs_episode):
     에피소드의 포인트 클라우드 시퀀스를 동영상처럼 재생하여 시각화합니다.
     실시간 렌더링 모범 사례를 적용하여 수정되었습니다[1].
     """
+
+    preprocess = PointCloudPreprocessor(camera_to_base,
+                                        workspace_bounds,
+                                        enable_sampling=False)
     pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
@@ -112,8 +134,9 @@ def point_cloud_visualize(obs_episode):
     print("포인트 클라우드 시퀀스를 재생합니다. (창이 활성화된 상태에서 'Q'를 누르면 종료됩니다)")
     
     for i, pts in enumerate(pts_seq):
-        xyz = pts[:, :3].astype(np.float64)
-        rgb = pts[:, 3:6].astype(np.float64) / 255.0
+        pc=preprocess(pts)
+        xyz = pc[:, :3].astype(np.float64)
+        rgb = pc[:, 3:6].astype(np.float64) / 255.0
         
         pcd.points = o3d.utility.Vector3dVector(xyz)
         pcd.colors = o3d.utility.Vector3dVector(rgb)
@@ -199,7 +222,7 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
             
 
 # 사용 예시
-analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/real_stack/recorder_data")
+analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/real_stack/recorder_data")
 # summary = analyzer.get_episode_summary()
 # print(f"총 에피소드 수: {summary['total_episodes']}")
 # for detail in summary['episode_details']:

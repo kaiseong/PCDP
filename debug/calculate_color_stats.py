@@ -22,7 +22,8 @@ def calculate_stats(dataset_path):
         tuple: (mean, std) as numpy arrays.
     """
     all_colors = []
-    
+    printed_once = False  # Flag to print debug info only once
+
     # Find all zarr files in the dataset path
     zarr_files = [f for f in os.listdir(dataset_path) if f.endswith('.zarr.zip')]
     if not zarr_files:
@@ -36,28 +37,46 @@ def calculate_stats(dataset_path):
             with zarr.ZipStore(archive_path, mode='r') as store:
                 replay_buffer = zarr.group(store=store)
                 
-                # Check if 'pointcloud' data exists
-                if 'obs.pointcloud' not in replay_buffer:
-                    print(f"Warning: 'obs.pointcloud' not found in {zarr_file}. Skipping.")
+                # Check for the required data groups and keys
+                if 'data' not in replay_buffer or 'meta' not in replay_buffer:
+                    print(f"Warning: 'data' or 'meta' group not found in {zarr_file}. Skipping.")
+                    continue
+                
+                data_group = replay_buffer['data']
+                meta_group = replay_buffer['meta']
+
+                if 'pointcloud' not in data_group or 'episode_ends' not in meta_group:
+                    print(f"Warning: 'pointcloud' or 'meta.episode_ends' not found in {zarr_file}. Skipping.")
                     continue
 
-                pointclouds = replay_buffer['obs.pointcloud']
-                num_episodes = replay_buffer.attrs['n_episodes']
-                episode_ends = replay_buffer['meta.episode_ends'][:]
+                pointclouds = data_group['pointcloud']
+                # Assuming n_episodes is an attribute of the root group
+                num_episodes = replay_buffer.attrs.get('n_episodes', len(meta_group['episode_ends']))
+                episode_ends = meta_group['episode_ends'][:]
 
                 start_idx = 0
                 for i in range(num_episodes):
                     end_idx = episode_ends[i]
-                    # Extract colors (assuming shape is [time, num_points, 6] and colors are the last 3 dims)
-                    # The data is stored flattened, so we need to consider the shape attribute
-                    # For simplicity, we'll just grab all color data and concatenate.
-                    # This assumes point cloud colors are stored in the last 3 channels.
-                    colors = pointclouds[start_idx:end_idx][..., 3:]
-                    
-                    # Reshape to a long list of [R, G, B] values
-                    # The shape of colors will be (time, num_points, 3)
-                    # We want to treat every point's color as an independent sample.
-                    all_colors.append(colors.reshape(-1, 3))
+                    # episode_data is an object array, where each element is a single frame's point cloud array.
+                    episode_data = pointclouds[start_idx:end_idx]
+
+                    # Iterate through each frame's point cloud in the episode
+                    for point_cloud_array in episode_data:
+                        # Ensure the array is 2D and has enough columns for color
+                        if isinstance(point_cloud_array, np.ndarray) and point_cloud_array.ndim == 2 and point_cloud_array.shape[1] >= 6:
+                            # --- DEBUG: Print first 5 color values ---
+                            if not printed_once:
+                                print("\n--- DEBUG: First 5 Color Values from the first valid point cloud ---")
+                                # The data is float32, not uint8 yet. The script converts later.
+                                print(point_cloud_array[:40, 3:6])
+                                print("---------------------------------------------------------------------\
+")
+                                printed_once = True
+                            # --- END DEBUG ---
+
+                            # Extract colors (assuming xyzrgb...)
+                            colors = point_cloud_array[:, 3:6]
+                            all_colors.append(colors)
                     
                     start_idx = end_idx
 
@@ -80,6 +99,7 @@ def calculate_stats(dataset_path):
     std = np.std(all_colors_np, axis=0)
 
     return mean, std
+
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate RGB statistics for a point cloud dataset.")

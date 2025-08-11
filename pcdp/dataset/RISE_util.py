@@ -1,16 +1,11 @@
 import numpy as np
 
 # imagenet statistics for image normalization
-IMG_MEAN = np.array([0.485, 0.456, 0.406])
-IMG_STD = np.array([0.229, 0.224, 0.225])
+IMG_MEAN = np.array([0.0217, 0.0217, 0.0217])
+IMG_STD = np.array([0.1474, 0.1474, 0.1474])
 
 # tcp normalization and gripper width normalization
-TRANS_MIN, TRANS_MAX = np.array([-0.5, -0.5, 0]), np.array([0.5, 0.5, 1.0]) 
-
-
-# workspace in camera coordinate
-WORKSPACE_MIN = np.array([-0.5, -0.5, 0])
-WORKSPACE_MAX = np.array([0.5, 0.5, 1.0])
+TRANS_MIN, TRANS_MAX = np.array([-0.018614, -0.53738, 0.10401]), np.array([0.486704, 0.4232, 0.448772]) 
 
 # safe workspace in base coordinate
 SAFE_EPS = 0.002

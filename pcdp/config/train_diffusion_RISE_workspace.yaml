@@ -27,13 +27,13 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 7
+  batch_size: 120
   num_workers: 16
   shuffle: True
   drop_last: True
 
 val_dataloader:
-  batch_size: 7
+  batch_size: 120
   num_workers: 16
   shuffle: False
   drop_last: False
@@ -63,7 +63,7 @@ logging:
   id: null
   mode: online
   name: "nscl_${now:%Y.%m.%d}"
-  project: rise_nscl
+  project: rise
   resume: true
   tags:
   - rise
