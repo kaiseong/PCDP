@@ -3,7 +3,7 @@
 import numpy as np
 import pinocchio as pin  # Pinocchio의 SE3 타입을 입력으로 받기 위해 필요
 # 사용자님께서 설치에 성공하신 tracikpy 라이브러리를 사용합니다.
-from tracikpy import TracIKSolver
+# from tracikpy import TracIKSolver
 from typing import Union
 
 class TracIKController:

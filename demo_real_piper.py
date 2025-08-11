@@ -33,7 +33,7 @@ from pcdp.real_world.keystroke_counter import (
 )
 
 @click.command()
-@click.option('--output', '-o', required=True, default = "demo_dataset" help="Directory to save demonstration dataset.")
+@click.option('--output', '-o', required=True, default ="demo_dataset", help="Directory to save demonstration dataset.")
 @click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
@@ -42,8 +42,8 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
     dt = 1/frequency
     
     # IK parameters
-    urdf_path = "/home/moai/pcdp/debug/piper_no_gripper_description.urdf"
-    mesh_dir = "/home/moai/pcdp"
+    urdf_path = "/home/moai/pcdp/dependencies/piper_description/urdf/piper_no_gripper_description.urdf"
+    mesh_dir = "/home/moai/pcdp/dependencies"
     ee_link_name = "link6"
     joints_to_lock_names = [] # No joints to lock in the no-gripper URDF
 

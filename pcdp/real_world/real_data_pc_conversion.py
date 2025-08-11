@@ -347,7 +347,7 @@ def process_single_episode(episode_path, preprocessor=None, downsample_factor=3)
         for pc in aligned_obs['pointcloud']:
             processed_pc = preprocessor.process(pc)
             processed_pointclouds.append(processed_pc)
-        aligned_obs['pointcloud'] = np.array(processed_pointclouds)
+        aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
     
     # Combine obs and action data
     episode_data = {}
@@ -521,7 +521,8 @@ def _get_replay_buffer(
                     # Validate episode data against shape_meta
                     if validate_episode_data_with_shape_meta(episode_data, shape_meta):
                         # Add episode to replay buffer
-                        replay_buffer.add_episode(episode_data)
+                        replay_buffer.add_episode(episode_data,
+                            object_codecs={'pointcloud': numcodecs.Pickle()})
                         pbar.set_postfix(
                             episodes=replay_buffer.n_episodes,
                             steps=replay_buffer.n_steps

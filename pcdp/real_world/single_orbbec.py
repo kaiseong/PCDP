@@ -56,7 +56,7 @@ class SingleOrbbec(mp.Process):
                 shape=(921600, 6), dtype=np.float32)  # XYZ + RGB
         elif mode == "C2D":
             examples['pointcloud'] = np.empty(
-                shape=(368640, 6), dtype=np.float32)
+                shape=(92160, 6), dtype=np.float32) # 368640 = 640*576  92160 = 320*288
         else:
             raise RuntimeError("mode is wrong")
         
@@ -86,7 +86,7 @@ class SingleOrbbec(mp.Process):
             shm_manager=shm_manager,
             examples=examples_,
             get_max_k=get_max_k,
-            get_time_budget=0.025,
+            get_time_budget=0.05,
             put_desired_frequency=put_fps
         )
 
@@ -197,7 +197,7 @@ class SingleOrbbec(mp.Process):
         pipeline = ob.Pipeline()
         cfg = ob.Config()
 
-        depth_res = (640, 576)
+        depth_res = (320, 288)
         color_res = self.resolution[::-1]
         
         if self.mode=="D2C":
@@ -288,7 +288,7 @@ class SingleOrbbec(mp.Process):
                     if self.mode == "D2C":
                         points_data = np.zeros((921600, 6), dtype=np.float32)
                     elif self.mode == "C2D":
-                        points_data = np.zeros((368640, 6), dtype=np.float32)
+                        points_data = np.zeros((92160, 6), dtype=np.float32) # 368640 = 640*576  92160 = 320*288
 
                 data = dict()
                 data['camera_receive_timestamp'] = receive_time

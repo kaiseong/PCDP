@@ -14,7 +14,7 @@ class TeleoperationPiper(mp.Process):
                 frequency: float=200,
                 get_max_k: int = 30,
                 dtype=np.float64,
-                threshold: float=30.0,
+                threshold: float=10.0,
                 ):
         super().__init__(name="TeleoperationPiper")
 
