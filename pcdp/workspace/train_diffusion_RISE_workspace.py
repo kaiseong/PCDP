@@ -78,7 +78,7 @@ class TrainRISEWorkspace(BaseWorkspace):
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
-                cprint(f"Resuming from checkpoint {lastest_ckpt_path}", "yellow", attrs=["bold"])
+                cprint(f"Resuming from checkpoint {lastest_ckpt_path}", "blue", attrs=["bold"])
                 self.load_checkpoint(path=lastest_ckpt_path)
 
         # dataset
@@ -168,7 +168,7 @@ class TrainRISEWorkspace(BaseWorkspace):
                 'train_loss_epoch': avg_loss_epoch,
                 'epoch': self.epoch
             }
-            if (self.epoch + 1) % cfg.training.validation_every == 0 and len(val_dataloader) >0:
+            if (self.epoch + 1) % cfg.training.validation_every == 0 and len(val_dataloader) > 0:
                 self.model.eval()
                 val_loss = 0
                 with torch.no_grad():
@@ -196,6 +196,7 @@ class TrainRISEWorkspace(BaseWorkspace):
             if (self.epoch + 1) % cfg.training.save_epochs == 0:
                 ckpt_path = os.path.join(self.output_dir, 'checkpoints', f"policy_epoch_{self.epoch + 1}_seed_{cfg.training.seed}.ckpt")
                 self.save_checkpoint(path=ckpt_path)
+                self.save_checkpoint()
                 
                 # plot history
                 plt.figure()

@@ -63,7 +63,7 @@ logging:
   id: null
   mode: online
   name: "seed-${training.seed}"
-  project: rise
+  project: rise_nscl
   resume: true
   tags:
   - rise
