@@ -78,7 +78,7 @@ class TeleoperationPiper(mp.Process):
             while not self.stop_event.is_set():
                 t_start = mono_time.now_s()
 
-                raw_state = piper.GetArmEndPoseMsgs()
+                raw_state = piper.GetArmJointMsgs()
                 raw_gripper =  piper.GetArmGripperMsgs()
                 state=np.asarray(raw_state, dtype=self.dtype)
                 gripper = 1 if raw_gripper[0] <= self.threshold else 0

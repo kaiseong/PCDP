@@ -44,7 +44,7 @@ def homogeneous_transform(tx, ty, tz, ang_y_deg, ang_z_deg):
 
 # Example usage
 if __name__ == "__main__":
-    tx, ty, tz = -125, 0, 530     # translation
-    ang_y, ang_z = 155, -90       # rotations
+    tx, ty, tz = 0.04, -0.29,-0.03     # translation
+    ang_y, ang_z = 1, 0       # rotations
     H = homogeneous_transform(tx, ty, tz, ang_y, ang_z)
     print("Homogeneous transform H_C_to_B:\n", H)

@@ -5,16 +5,16 @@ from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 import pcdp.common.mono_time as mono_time
 
 camera_to_base = np.array([
-                [ 0.0,        -0.9063,      0.4226,    0.110],
-                [ -1.0,        0.,          0.,          0.],
-                [0.0,          -0.4226,      -0.9063,     0.510       ],
-                [ 0.,          0.,          0.,          1.         ]
-            ])
+    [  0.007131,  -0.91491,    0.403594,  0.05116],
+    [ -0.994138,   0.003833,   0.02656,  -0.00918],
+    [ -0.025717,  -0.403641,  -0.914552, 0.50821 ],
+    [  0.,         0. ,        0. ,        1.      ]
+    ])
 
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (milli meters)
-    [-0.400, 0.400],    # Y range (milli meters)
-    [-0.100, 0.350]     # Z range (milli meters)
+    [-0.800, 0.800],    # X range (milli meters)
+    [-0.800, 0.800],    # Y range (milli meters)
+    [-0.800, 0.350]     # Z range (milli meters)
 ])
 
 

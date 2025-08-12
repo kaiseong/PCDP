@@ -9,13 +9,14 @@ import scipy.spatial.transform as st
 import numpy as np
 from typing import (Optional, List)
 import pinocchio as pin
+from pinocchio.robot_wrapper import RobotWrapper
 from piper_sdk import *
 from pcdp.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from pcdp.common.only_pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from pcdp.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import pcdp.common.mono_time as mono_time
-from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
+# from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
 # from pcdp.real_world.trac_ik_controller import TracIKController
 from termcolor import cprint
 
@@ -85,19 +86,20 @@ class PiperInterpolationController(mp.Process):
         super().__init__(name="PiperInterpolationController")
         
         # IK Controller
-        self.ik_controller = PinocchioIKController(
-            urdf_path=urdf_path,
-            mesh_dir=mesh_dir,
-            ee_link_name=ee_link_name,
-            joints_to_lock_names=joints_to_lock_names
-        )
-        # self.ik_controller = TracIKController(
+        # self.ik_controller = PinocchioIKController(
         #     urdf_path=urdf_path,
+        #     mesh_dir=mesh_dir,
         #     ee_link_name=ee_link_name,
-        #     base_link_name="base_link",
-        #     solve_type="Speed",
+        #     joints_to_lock_names=joints_to_lock_names
         # )
+        fk_robot = RobotWrapper.BuildFromURDF(urdf_path, [mesh_dir])
+        fk_model, fk_data = fk_robot.model, fk_robot.data
+        fid = fk_model.getFrameId(ee_link_name)
+        assert fid != len(fk_model.frames), f"Frame '{ee_link_name}' not found."
         
+        self.model = fk_model
+        self.data = fk_data
+        self.fid = fid
         self.frequency = frequency
         self.lookahead_time = lookahead_time
         self.gain = gain
@@ -193,6 +195,8 @@ class PiperInterpolationController(mp.Process):
     def _rad_to_sdk_joint(self, rad: np.ndarray) -> List[int]:
         """Converts joint angles in radians to the integer format for Piper SDK."""
         return (np.rad2deg(rad) * 1e3).astype(int).tolist()
+    
+
 
     # =========== context method ============
     def __enter__(self):
@@ -366,11 +370,7 @@ class PiperInterpolationController(mp.Process):
                     target= np.append(pos.astype(int), rot.astype(int))
                     target = target.tolist()
                 else:
-                    pos = target_pose_vec[:3]
-                    rot_vec = target_pose_vec[3:6]
-                    # rot = st.Rotation.from_rotvec(rot_vec).as_matrix()
-                    rot = st.Rotation.from_euler('xyz', rot_vec).as_matrix()
-                    target_se3 = pin.SE3(rot, pos)
+                    target_joints = target_pose_vec[:6]
                 
                 gripper = target_pose_vec[6]
                 
@@ -380,23 +380,27 @@ class PiperInterpolationController(mp.Process):
                     piper.MotionCtrl_2(0x01, 0x00, 50, 0x00)
                     piper.EndPoseCtrl(target)
                 else:
-                    target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
-                    
                     if target_joints is not None:
                         piper.MotionCtrl_2(0x01, 0x01, 50, 0x00) # Using a moderate speed
                         piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
                     else:
-                        if self.verbose:
-                            cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
+                        cprint(f"[Piper_Controller] Target_joints is Null", "yellow")
                 
                 if gripper <= 1.1 and gripper >= 0.9:
                     piper.GripperCtrl(0, 1000, 0x01)
                 else:
                     piper.GripperCtrl(95000, 1000, 0x01)
 
+
+                pin.forwardKinematics(self.model, self.data, last_q)
+                pin.updateFramePlacements(self.model, self.data)
+                M_fk = self.data.oMf[self.fid]
+
+                save_pose_vec = np.hstack([M_fk.translation, pin.rpy.matrixToRpy(M_fk.rotation), np.array([gripper])])
+
                 # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad
-                state["TargetEndPose"] = target_pose_vec
+                state["TargetEndPose"] = save_pose_vec
                 state["robot_receive_timestamp"] = mono_time.now_s()
                 self.ring_buffer.put(state)
 
