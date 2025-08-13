@@ -157,12 +157,14 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
                 precise_wait(t_sample)
                 # get teleop command
-                target_joints = ms.get_motion_state()
+                target_pose = ms.get_motion_state()
+                action_to_record = obs['robot_eef_pose'][-1]
                 # execute teleop command
                 env.exec_actions(
-                    actions=[target_joints], 
+                    actions=[target_pose], 
                     timestamps=[t_command_target],
-                    stages=[stage])
+                    stages=[stage],
+                    recorded_actions=[action_to_record])
                 precise_wait(t_cycle_end)
                 iter_idx += 1
 

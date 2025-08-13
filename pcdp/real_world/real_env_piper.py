@@ -8,9 +8,6 @@ from multiprocessing.managers import SharedMemoryManager
 from pcdp.real_world.piper_interpolation_controller import PiperInterpolationController
 from pcdp.real_world.single_orbbec import SingleOrbbec
 from pcdp.real_world.recorder import Recorder
-import pinocchio as pin
-from pinocchio.robot_wrapper import RobotWrapper
-
 from pcdp.common.timestamp_accumulator import (
     TimestampObsAccumulator, 
     TimestampActionAccumulator,
@@ -111,15 +108,7 @@ class RealEnv:
             compression_level=2,
             frequency=100.0
         )
-        fk_robot = RobotWrapper.BuildFromURDF(urdf_path, [mesh_dir])
-        fk_model, fk_data = fk_robot.model, fk_robot.data
-        fid = fk_model.getFrameId(ee_link_name)
-        assert fid != len(fk_model.frames), f"Frame '{ee_link_name}' not found."
-
-
-        self.model = fk_model
-        self.data = fk_data
-        self.fid = fid
+        
         self.orbbec = orbbec
         self.robot = robot
         self.recorder = recorder
@@ -255,7 +244,8 @@ class RealEnv:
     def exec_actions(self, 
             actions: np.ndarray, 
             timestamps: np.ndarray, 
-            stages: Optional[np.ndarray]=None):
+            stages: Optional[np.ndarray]=None,
+            recorded_actions: Optional[np.ndarray]=None):
         assert self.is_ready
         if not isinstance(actions, np.ndarray):
             actions = np.array(actions)
@@ -278,18 +268,10 @@ class RealEnv:
                 pose=new_actions[i],
                 target_time=new_timestamps[i]
             )
-
-
-            gripper = new_actions[i, 6]
-            q=new_actions[i,:6]
-            pin.forwardKinematics(self.model, self.data, q)
-            pin.updateFramePlacements(self.model, self.data)
-            M_fk = self.data.oMf[self.fid]
-            save_pose_vec = np.hstack([M_fk.translation, pin.rpy.matrixToRpy(M_fk.rotation), np.array([gripper])])
-
             if self.recorder.is_recording:
+                # action_to_record = recorded_actions[i] if recorded_actions is not None else new_actions[i]
                 self.recorder.add_action(
-                    action=save_pose_vec,
+                    action=new_actions[i],
                     timestamp=new_timestamps[i],
                     stage=new_stages[i]
                 )
@@ -329,4 +311,3 @@ class RealEnv:
         # self.end_episode()
         # self.replay_buffer.drop_episode()
         self.recorder.drop_episode()
-

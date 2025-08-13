@@ -39,7 +39,7 @@ class TeleoperationPiper(mp.Process):
 
     def get_motion_state(self):
         state = self.action_ring_buffer.get()
-        # [j1, j2, j3, j4, j5, j6, Grip]
+        # [Tx, Ty, Tz, Rx, Ry, Rz, Grip]
         action = np.array(state['action'][:7], dtype=self.dtype)
         return action
     
@@ -78,11 +78,12 @@ class TeleoperationPiper(mp.Process):
             while not self.stop_event.is_set():
                 t_start = mono_time.now_s()
 
-                raw_state = piper.GetArmJointMsgs()
+                raw_state = piper.GetArmEndPoseMsgs()
                 raw_gripper =  piper.GetArmGripperMsgs()
                 state=np.asarray(raw_state, dtype=self.dtype)
                 gripper = 1 if raw_gripper[0] <= self.threshold else 0
-                state = np.deg2rad(state)
+                state[:3] = state[:3] * 1e-3
+                state[3:] = np.deg2rad(state[3:])
                 state=np.append(state, gripper)
                 
                 
@@ -96,11 +97,10 @@ class TeleoperationPiper(mp.Process):
                 if sleep_time>0:
                     time.sleep(sleep_time)
         finally:
-            # piper.DisableArm(7)
+            piper.DisableArm(7)
             time.sleep(1)
             piper.DisconnectPort()
             self.ready_event.set()
-
 
 
 
