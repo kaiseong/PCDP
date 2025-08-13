@@ -249,7 +249,7 @@ class PiperInterpolationController(mp.Process):
             piper = C_PiperInterface_V2("can_slave")
             piper.ConnectPort()
             piper.SetSDKJointLimitParam('j4', -1.7977, 1.7977)
-            piper.SetSDKJointLimitParam('j5', -1.3265, 1.3265)
+            piper.SetSDKJointLimitParam('j5', -1.4265, 1.4265)
             piper.SetSDKJointLimitParam('j6', -2.0071, 2.2166)
         except Exception as e:
             cprint(f"[Piper_Controller] Failed to connect to Piper: {e}", "magenta", attrs=["bold"])

@@ -1,20 +1,9 @@
 import numpy as np
 import pyorbbecsdk as ob
 import open3d as o3d
-import pinocchio as pin
-import os
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
-from piper_sdk import *
-
-# ======= 환경에 맞게 수정 =======
-URDF_PATH = "/home/moai/pcdp/dependencies/piper_description/urdf/piper_no_gripper_description.urdf"
-MESH_DIRS = ["/home/moai/pcdp/dependencies"]
-EEF_FRAME_NAME = "link6"
-# ==============================
-
-def get_q_from_joints_msg(jm):
-    q_deg = np.array(jm, dtype=np.float64)
-    return np.deg2rad(q_deg[:6])
+from piper_sdk import C_PiperInterface_V2
+from pcdp.common import RISE_transformation as rise_tf
 
 # Transformation matrices and workspace bounds
 camera_to_base = np.array([
@@ -24,25 +13,27 @@ camera_to_base = np.array([
     [  0.,         0. ,        0. ,        1.      ]
 ])
 robot_to_base = np.array([
-    [1.,         0.,         0.,          0.04],
+    [1.,         0.,         0.,          -0.04],
     [0.,         1.,         0.,         -0.29],
     [0.,         0.,         1.,          -0.03],
     [0.,         0.,         0.,          1.0]
 ])
+
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (meters)
-    [-0.400, 0.400],   # Y range (meters)
-    [-0.100, 0.350]    # Z range (meters)
+    [-0.000, 0.740],    # X range (milli meters)
+    [-0.400, 0.350],    # Y range (milli meters)
+    [-0.100, 0.400]     # Z range (milli meters)
 ])
+
+z_offset = np.array([
+    [1, 0, 0, 0], 
+    [0, 1, 0, 0], 
+    [0, 0, 1, 0.07], 
+    [0, 0, 0, 1]])
 
 def main():
     piper = C_PiperInterface_V2("can_slave")
     piper.ConnectPort()
-    
-    robot = pin.RobotWrapper.BuildFromURDF(URDF_PATH, MESH_DIRS)
-    model, data = robot.model, robot.data
-    fid = model.getFrameId(EEF_FRAME_NAME)
-    assert fid != len(model.frames), f"Frame '{EEF_FRAME_NAME}' not found."
     
     preprocess = PointCloudPreprocessor(camera_to_base,
                                         workspace_bounds,
@@ -69,67 +60,55 @@ def main():
     pc_filter.set_camera_param(cam_param)
     pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
     
-    # Open3D 시각화 설정
     vis = o3d.visualization.Visualizer()
-    vis.create_window(window_name='default', width=1280, height=720)
+    vis.create_window(window_name='Live View', width=1280, height=720)
     opt = vis.get_render_option()
     opt.point_size = 2.0
-    opt.background_color = np.array([1.0, 1.0, 1.0])
+    opt.background_color = np.array([0.1, 0.1, 0.1])
     
     pcd = o3d.geometry.PointCloud()
-    eef_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
-    
-    # ======== ✨ 원본 정점 저장 (핵심 수정) ✨ ========
-    original_eef_vertices = np.asarray(eef_frame.vertices).copy()
-    # ====================================================
-    
+    eef_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+    base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+    camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+    camera_frame.transform(camera_to_base)
+    last_eef_transform = np.identity(4)
     first_iter = True
     
     try:
         while True:
             frames = pipeline.wait_for_frames(100)
-            if frames is None: continue
+            if frames is None: 
+                if not vis.poll_events(): break
+                continue
             
             depth, color = frames.get_depth_frame(), frames.get_color_frame()
-            if depth is None or color is None: continue
+            if depth is None or color is None: 
+                if not vis.poll_events(): break
+                continue
             
-            # 포인트 클라우드 처리
             frame = align.process(frames)
             pc_filter.set_position_data_scaled(depth.get_depth_scale())
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
             pc = np.asarray(point_cloud)
-            pc = pc[np.isfinite(pc).all(axis=1)]
-            if pc.size == 0: continue
-            pc = pc[pc[:, 2] > 0.0]
             processed_pc = preprocess(pc)
             
-            # 로봇 EEF 자세 처리 및 변환
-            joints = piper.GetArmJointMsgs()
-            q = get_q_from_joints_msg(joints)
-            
-            pin.forwardKinematics(model, data, q)
-            pin.updateFramePlacements(model, data)
-            M_fk = data.oMf[fid]
-            T_eef_in_world = robot_to_base @ M_fk.homogeneous
-
-            # 시각화 업데이트
             pcd.points = o3d.utility.Vector3dVector(processed_pc[:, :3])
             pcd.colors = o3d.utility.Vector3dVector(processed_pc[:, 3:6] / 255.0)
             
-            # ======== ✨ EEF 좌표계 업데이트 (핵심 수정) ✨ ========
-            new_vertices = (T_eef_in_world[:3, :3] @ original_eef_vertices.T + T_eef_in_world[:3, 3:4]).T
-            eef_frame.vertices = o3d.utility.Vector3dVector(new_vertices)
-            eef_frame.compute_vertex_normals() # 조명을 위해 법선 벡터 재계산
-            # =======================================================
+            eef_pose_raw = piper.GetArmEndPoseMsgs()
+            eef_pos_m = np.array(eef_pose_raw[:3]) / 1000.0
+            eef_rot_rad = np.deg2rad(eef_pose_raw[3:])
+            
+            eef_to_robot_base = rise_tf.rot_trans_mat(eef_pos_m, eef_rot_rad)
+            current_eef_transform = robot_to_base @ eef_to_robot_base @ z_offset
+            
+            eef_frame.transform(current_eef_transform @ np.linalg.inv(last_eef_transform))
+            last_eef_transform = current_eef_transform.copy()
 
             if first_iter:
                 vis.add_geometry(pcd)
                 vis.add_geometry(eef_frame)
-                
-                base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
                 vis.add_geometry(base_frame)
-                camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
-                camera_frame.transform(camera_to_base)
                 vis.add_geometry(camera_frame)
                 
                 points = [ [x,y,z] for x in workspace_bounds[0] for y in workspace_bounds[1] for z in workspace_bounds[2] ]
@@ -148,7 +127,8 @@ def main():
                 vis.update_geometry(pcd)
                 vis.update_geometry(eef_frame)
             
-            vis.poll_events()
+            if not vis.poll_events():
+                break
             vis.update_renderer()
             
     except Exception as e:

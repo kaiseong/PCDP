@@ -97,7 +97,7 @@ class TeleoperationPiper(mp.Process):
                 if sleep_time>0:
                     time.sleep(sleep_time)
         finally:
-            piper.DisableArm(7)
+            # piper.DisableArm(7)
             time.sleep(1)
             piper.DisconnectPort()
             self.ready_event.set()

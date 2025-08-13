@@ -26,11 +26,28 @@ from termcolor import cprint
 import scipy.spatial.transform as st
 from pcdp.real_world.real_env_piper import RealEnv
 from pcdp.real_world.teleoperation_piper import TeleoperationPiper
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 from pcdp.common.precise_sleep import precise_wait
 import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
+
+camera_to_base = np.array([
+    [  0.007131,  -0.91491,    0.403594,  0.05116],
+    [ -0.994138,   0.003833,   0.02656,  -0.00918],
+    [ -0.025717,  -0.403641,  -0.914552, 0.50821 ],
+    [  0.,         0. ,        0. ,        1.      ]
+    ])
+
+workspace_bounds = np.array([
+    [-0.000, 0.740],    # X range (milli meters)
+    [-0.400, 0.350],    # Y range (milli meters)
+    [-0.100, 0.400]     # Z range (milli meters)
+])
+
+
+
 
 @click.command()
 @click.option('--output', '-o', required=True, default ="demo_dataset", help="Directory to save demonstration dataset.")
@@ -72,22 +89,30 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             
             time.sleep(2.0)
             print('Ready!')
+            preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
+                                                workspace_bounds=workspace_bounds,
+                                                enable_sampling=False)
             state = env.get_robot_state()
             target_pose = base_pose.copy()
             t_start = mono_time.now_s()
             iter_idx = 0
             stop = False
             is_recording = False
-            # open3d visualization
-            vis = o3d.visualization.Visualizer()
-            vis.create_window(window_name='default', width=1280, height=720)
-            opt = vis.get_render_option()
-            opt.point_size = 2.0
-            opt.background_color = np.array([0.0, 0.0, 0.0])
-            pcd = o3d.geometry.PointCloud()
-            down_smaple_scale = 100
+            visual= False
+
+            if visual:
+                # open3d visualization
+                vis = o3d.visualization.Visualizer()
+                vis.create_window(window_name='default', width=1280, height=720)
+                opt = vis.get_render_option()
+                opt.point_size = 2.0
+                opt.background_color = np.array([1., 1.0, 1.0])
+                pcd = o3d.geometry.PointCloud()
             first = True
-            pre_time = time.time_ns()
+
+            duration = np.array([])
+            t0=0
+
             while not stop:
                 # calculate timing
                 t_cycle_end = t_start + (iter_idx + 1) * dt
@@ -126,33 +151,37 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 # visualize
                 # if is_recording:
                     # print("recoding!")
-                vis_pc = obs["pointcloud"][-1].copy()
                 episode_id = env.recorder.n_episodes
                 text = f'Episode: {episode_id}, Stage: {stage}'
                 if is_recording:
                     text += ', Recording!'
-                vis_pc = np.asarray(vis_pc)
-                vis_pc = vis_pc[vis_pc[:, 2] > 0.0]  # remove points below ground
-                vis_pc = vis_pc[:: int(down_smaple_scale)]  # downsample
                 
-                pcd.points = o3d.utility.Vector3dVector(vis_pc[:, :3])
-                pcd.colors = o3d.utility.Vector3dVector(vis_pc[:, 3:6] / 255.0)
+                if visual:
+                    vis_pc = obs["pointcloud"][-1].copy()
+                    vis_pc = np.asarray(vis_pc)
+                    vis_pc = preprocessor(vis_pc)
 
-                now = time.time_ns()
-                if first:
-                    vis.add_geometry(pcd, reset_bounding_box=True)
-                    ctr = vis.get_view_control()
-                    bbox = pcd.get_axis_aligned_bounding_box()
-                    ctr.set_lookat(bbox.get_center())
-                    ctr.set_front([0.0, 0.0, -1.0])
-                    ctr.set_up([0.0, -1.0, 0.0])
-                    ctr.set_zoom(0.4)
-                    first = False
-                else:
-                    vis.update_geometry(pcd)
-                vis.poll_events()
-                vis.update_renderer()
-                pre_time = now
+                    pcd.points = o3d.utility.Vector3dVector(vis_pc[:, :3])
+                    pcd.colors = o3d.utility.Vector3dVector(vis_pc[:, 3:6] / 255.0)
+                    if first:
+                        vis.add_geometry(pcd, reset_bounding_box=True)
+                        ctr = vis.get_view_control()
+                        bbox = pcd.get_axis_aligned_bounding_box()
+                        ctr.set_lookat(bbox.get_center())
+                        ctr.set_front([0.0, 0.0, -1.0])
+                        ctr.set_up([0.0, -1.0, 0.0])
+                        ctr.set_zoom(0.4)
+                        first = False
+                    else:
+                        vis.update_geometry(pcd)
+                    vis.poll_events()
+                    vis.update_renderer()
+                
+                diff = mono_time.now_ms() - t0
+                if diff > 120:
+                    duration = np.append(duration, diff)
+                t0 = mono_time.now_ms()
+                
 
 
                 precise_wait(t_sample)
@@ -167,6 +196,12 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                     recorded_actions=[action_to_record])
                 precise_wait(t_cycle_end)
                 iter_idx += 1
+            duration = duration[1:]
+            print(f"""[demo_real_piper]
+                    cnt: {len(duration)} ea
+                    mean: {duration.mean():.4f} ms
+                    max: {duration.max():.4f} ms
+                    min: {duration.min():.4f} ms""")
 
 # %%
 if __name__ == '__main__':
