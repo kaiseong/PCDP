@@ -60,14 +60,14 @@ dataset:
     verbose: False
     # Camera to robot transformation matrix (4x4). 
     extrinsics_matrix:
-      - [ 0.0,  -0.9063,  0.4226,  0.110]
-      - [ -1.0,  0.0,  0.0,  0.0]
-      - [ 0.0, -0.4226,  -0.9063,   0.510]
-      - [ 0.0,          0.0,          0.0,          1.0]
+      - [  0.007131,  -0.91491,    0.403594,  0.05116]
+      - [ -0.994138,   0.003833,   0.02656,  -0.00918]
+      - [ -0.025717,  -0.403641,  -0.914552, 0.50821]
+      - [ 0.,         0. ,        0. ,        1.    ]
     
     # Workspace bounds [x_min, x_max], [y_min, y_max], [z_min, z_max]
     workspace_bounds:
-      - [0.100, 0.800]    # X range (meters)
-      - [-0.400, 0.400]   # Y range (meters)  
+      - [-0.800, 0.800]    # X range (meters)
+      - [-0.500, 0.500]   # Y range (meters)  
       - [-0.100, 0.350]    # Z range (meters)
 

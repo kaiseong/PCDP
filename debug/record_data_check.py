@@ -20,23 +20,32 @@ import open3d as o3d
 from pcdp.common.replay_buffer import ReplayBuffer
 import time
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
+from pcdp.common import RISE_transformation as rise_tf
 
 import csv
 
 
 
 camera_to_base = np.array([
-                [ 0.0,        -0.9063,      0.4226,    0.110],
-                [ -1.0,        0.,          0.,          0.],
-                [0.0,          -0.4226,      -0.9063,     0.510       ],
-                [ 0.,          0.,          0.,          1.         ]
-            ])
+    [  0.007131,  -0.91491,    0.403594,  0.05116],
+    [ -0.994138,   0.003833,   0.02656,  -0.00918],
+    [ -0.025717,  -0.403641,  -0.914552, 0.50821 ],
+    [  0.,         0. ,        0. ,        1.      ]
+    ])
 
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (milli meters)
-    [-0.400, 0.400],    # Y range (milli meters)
+    [-0.800, 0.800],    # X range (milli meters)
+    [-0.500, 0.500],    # Y range (milli meters)
     [-0.100, 0.350]     # Z range (milli meters)
 ])
+
+robot_to_base = np.array([
+    [1.,         0.,         0.,          0.04],
+    [0.,         1.,         0.,         -0.29],
+    [0.,         0.,         1.,          -0.03],
+    [0.,         0.,         0.,          1.0]
+])
+
 
 
 def save_timestamp_duration_to_csv(timestamps, filename):
@@ -107,7 +116,7 @@ class EpisodeAnalyzer:
         
         return summary
     
-def point_cloud_visualize(obs_episode):
+def point_cloud_visualize(obs_episode, action_episode):
     """
     에피소드의 포인트 클라우드 시퀀스를 동영상처럼 재생하여 시각화합니다.
     실시간 렌더링 모범 사례를 적용하여 수정되었습니다[1].
@@ -117,6 +126,8 @@ def point_cloud_visualize(obs_episode):
                                         workspace_bounds,
                                         enable_sampling=False)
     pts_seq = obs_episode['pointcloud']
+    action_seq = action_episode['action']
+    
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
         return
@@ -129,11 +140,18 @@ def point_cloud_visualize(obs_episode):
     opt.background_color = np.array([0, 0, 0])
     
     pcd = o3d.geometry.PointCloud()
+    eef_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+    last_eef_transform = np.identity(4)
+
     is_first_frame = True
     
     print("포인트 클라우드 시퀀스를 재생합니다. (창이 활성화된 상태에서 'Q'를 누르면 종료됩니다)")
     
-    for i, pts in enumerate(pts_seq):
+    num_frames = min(len(pts_seq), len(action_seq))
+    for i in range(num_frames):
+        pts = pts_seq[i]
+        action = action_seq[i]
+        
         pc=preprocess(pts)
         xyz = pc[:, :3].astype(np.float64)
         rgb = pc[:, 3:6].astype(np.float64) / 255.0
@@ -141,8 +159,52 @@ def point_cloud_visualize(obs_episode):
         pcd.points = o3d.utility.Vector3dVector(xyz)
         pcd.colors = o3d.utility.Vector3dVector(rgb)
         
+        # Update eef_frame transformation
+        eef_to_robot_base = rise_tf.rot_trans_mat(action[:3], action[3:])
+        current_eef_transform = robot_to_base @ eef_to_robot_base
+        
+        transform_to_apply = current_eef_transform @ np.linalg.inv(last_eef_transform)
+        eef_frame.transform(transform_to_apply)
+        last_eef_transform = current_eef_transform
+
         if is_first_frame:
             vis.add_geometry(pcd)
+            vis.add_geometry(eef_frame)
+            
+            # Add base coordinate system at the origin
+            base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                size=0.1, origin=[0, 0, 0])
+            vis.add_geometry(base_frame)
+
+            # Add camera coordinate system, transformed to its pose relative to the base
+            camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                size=0.05, origin=[0, 0, 0])  # Smaller size to distinguish
+            camera_frame.transform(camera_to_base)
+            vis.add_geometry(camera_frame)
+            
+            # Draw workspace bounding box
+            points = [
+                [workspace_bounds[0, 0], workspace_bounds[1, 0], workspace_bounds[2, 0]],
+                [workspace_bounds[0, 1], workspace_bounds[1, 0], workspace_bounds[2, 0]],
+                [workspace_bounds[0, 0], workspace_bounds[1, 1], workspace_bounds[2, 0]],
+                [workspace_bounds[0, 0], workspace_bounds[1, 0], workspace_bounds[2, 1]],
+                [workspace_bounds[0, 1], workspace_bounds[1, 1], workspace_bounds[2, 0]],
+                [workspace_bounds[0, 1], workspace_bounds[1, 0], workspace_bounds[2, 1]],
+                [workspace_bounds[0, 0], workspace_bounds[1, 1], workspace_bounds[2, 1]],
+                [workspace_bounds[0, 1], workspace_bounds[1, 1], workspace_bounds[2, 1]],
+            ]
+            lines = [
+                [0, 1], [0, 2], [1, 4], [2, 4],
+                [0, 3], [1, 5], [2, 6], [4, 7],
+                [3, 5], [3, 6], [5, 7], [6, 7]
+            ]
+            colors = [[1, 0, 0] for _ in range(len(lines))]
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(points)
+            line_set.lines = o3d.utility.Vector2iVector(lines)
+            line_set.colors = o3d.utility.Vector3dVector(colors)
+            vis.add_geometry(line_set)
+
             # 카메라 뷰 초기 설정
             ctr = vis.get_view_control()
             ctr.set_lookat(pcd.get_axis_aligned_bounding_box().get_center())
@@ -152,6 +214,7 @@ def point_cloud_visualize(obs_episode):
             is_first_frame = False
         else:
             vis.update_geometry(pcd)
+            vis.update_geometry(eef_frame)
         
         # 렌더링 업데이트 및 이벤트 처리
         if not vis.poll_events():
@@ -218,7 +281,7 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
                 writer.writerow([i, action[i][0], action[i][1], action[i][2], action[i][3], action[i][4], action[i][5]])
         action_csv=f'{episode_name}_action_timestamp_dataset.csv'
         save_timestamp_duration_to_csv(action_timestamps, action_csv)
-        point_cloud_visualize(obs_episode)
+        point_cloud_visualize(obs_episode, action_episode)
             
 
 # 사용 예시
@@ -230,5 +293,5 @@ analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/real_stack/recorder
 #           f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
 
 # 사용 예시
-obs_buffer, action_buffer = analyzer.load_episode('episode_0050')
-analyze_episode_quality(obs_buffer, action_buffer, 'episode_0050')
+obs_buffer, action_buffer = analyzer.load_episode('episode_0000')
+analyze_episode_quality(obs_buffer, action_buffer, 'episode_0000')

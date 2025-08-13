@@ -267,7 +267,8 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
             'action': torch.from_numpy(actions_7d).float(),
-            'action_normalized': torch.from_numpy(actions_normalized).float()
+            'action_normalized': torch.from_numpy(actions_normalized).float(),
+            'action_euler': torch.from_numpy(actions_euler).float()
         }
 
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
@@ -290,7 +291,7 @@ def collate_fn(batch):
     if isinstance(elem, container_abcs.Mapping):
         ret_dict = {}
         for key in elem:
-            if key in ['action', 'action_normalized']:
+            if key in ['action', 'action_normalized', 'action_euler']:
                 ret_dict[key] = torch.stack([d[key] for d in batch], 0)
             elif key in ['input_coords_list', 'input_feats_list']:
                 flat_list = [item for sublist in [d[key] for d in batch] for item in sublist]
