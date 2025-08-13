@@ -157,10 +157,10 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
 
                 precise_wait(t_sample)
                 # get teleop command
-                target_pose = ms.get_motion_state()
+                target_joints = ms.get_motion_state()
                 # execute teleop command
                 env.exec_actions(
-                    actions=[target_pose], 
+                    actions=[target_joints], 
                     timestamps=[t_command_target],
                     stages=[stage])
                 precise_wait(t_cycle_end)
