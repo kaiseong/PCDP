@@ -21,16 +21,16 @@ from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 
 
 camera_to_base = np.array([
-                [ 0.0,        -0.9063,      0.4226,    0.110],
-                [ -1.0,        0.,          0.,          0.],
-                [0.0,          -0.4226,      -0.9063,     0.510       ],
-                [ 0.,          0.,          0.,          1.         ]
-            ])
+    [  0.007131,  -0.91491,    0.403594,  0.05116],
+    [ -0.994138,   0.003833,   0.02656,  -0.00918],
+    [ -0.025717,  -0.403641,  -0.914552, 0.50821 ],
+    [  0.,         0. ,        0. ,        1.      ]
+    ])
 
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (milli meters)
-    [-0.400, 0.400],    # Y range (milli meters)
-    [-0.100, 0.350]     # Z range (milli meters)
+    [-0.000, 0.740],    # X range (m)
+    [-0.400, 0.350],    # Y range (m)
+    [-0.100, 0.400]     # Z range (m)
 ])
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -61,7 +61,7 @@ def main():
 
     # 3) DataLoader
     dl = DataLoader(ds, batch_size=BATCH_SIZE_VIS,
-                    num_workers=0, shuffle=False, collate_fn=collate_fn)
+                    num_workers=20, shuffle=False, collate_fn=collate_fn)
     
     batch_iter = iter(dl)
     pbar = tqdm.tqdm(total=len(dl), desc="Processing batches")

@@ -5,10 +5,7 @@ import pathlib
 import numpy as np
 import zarr
 import numcodecs
-import multiprocessing
-import concurrent.futures
 from tqdm import tqdm
-from threadpoolctl import threadpool_limits
 
 import torch
 try:
@@ -17,9 +14,15 @@ try:
 except ImportError:
     PYTORCH3D_AVAILABLE = False
     print("Warning: pytorch3d not available. FPS will use fallback method.")
-
+from pcdp.common import RISE_transformation as rise_tf
 from pcdp.common.replay_buffer import ReplayBuffer, get_optimal_chunks
 
+robot_to_base = np.array([
+    [1., 0., 0., -0.04],
+    [0., 1., 0., -0.29],
+    [0., 0., 1., -0.03],
+    [0., 0., 0.,  1.0]
+])
 
 class PointCloudPreprocessor:
     """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
@@ -27,10 +30,13 @@ class PointCloudPreprocessor:
     def __init__(self, 
                 extrinsics_matrix=None,
                 workspace_bounds=None,
+                rgb_mean=None,
+                rgb_std=None,
                 target_num_points=1024,
                 enable_transform=True,
                 enable_cropping=True,
                 enable_sampling=True,
+                enable_normalize=True,
                 use_cuda=True,
                 verbose=False):
         """
@@ -49,10 +55,10 @@ class PointCloudPreprocessor:
         # Default extrinsics matrix (camera to robot transform)
         if extrinsics_matrix is None:
             self.extrinsics_matrix = np.array([
-                [ 0.5213259,  -0.84716441,  0.10262438,  0.04268034],
-                [ 0.25161211,  0.26751035,  0.93012341,  0.15598059],
-                [-0.81542053, -0.45907589,  0.3526169,   0.47807532],
-                [ 0.,          0.,          0.,          1.        ]
+                [  0.007131,  -0.91491,    0.403594,  0.05116],
+                [ -0.994138,   0.003833,   0.02656,  -0.00918],
+                [ -0.025717,  -0.403641,  -0.914552, 0.50821 ],
+                [  0.,         0. ,        0. ,        1.      ]
             ])
         else:
             self.extrinsics_matrix = np.array(extrinsics_matrix)
@@ -60,17 +66,28 @@ class PointCloudPreprocessor:
         # Default workspace bounds
         if workspace_bounds is None:
             self.workspace_bounds = [
-                [0.65, 1.1],   # x range
-                [0.45, 0.66],  # y range  
-                [-0.7, 0]      # z range
+                [-0.000, 0.740],    # X range (m)
+                [-0.400, 0.350],    # Y range (m)
+                [-0.100, 0.400]     # z range
             ]
         else:
             self.workspace_bounds = workspace_bounds
+        
+        if rgb_mean is None:
+            self.rgb_mean = np.array([0.1234, 0.1234, 0.1234])
+        else:
+            self.rgb_mean=rgb_mean
+
+        if rgb_std is None:
+            self.rgb_std = np.array([0.2620, 0.2710, 0.2709])
+        else:
+            self.rgb_std=rgb_std
             
         self.target_num_points = target_num_points
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
+        self.enable_normalize = enable_normalize
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
         
@@ -101,7 +118,9 @@ class PointCloudPreprocessor:
             
         # Ensure points is float32
         points = points.astype(np.float32)
-        
+
+        if self.enable_normalize:
+            points = self._apply_normalize(points)
         # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
@@ -112,7 +131,15 @@ class PointCloudPreprocessor:
         if self.enable_sampling:
             points = self._sample_points(points)
         return points
-        
+
+    def _apply_normalize(self, points):
+        points[:, 3:6] = points[:, 3:6] / 255.0
+        points[:, 3:6] = (points[:, 3:6] - self.rgb_mean) / self.rgb_std
+
+        if self.verbose and len(points) > 0:
+            print(f"mean: {points[:, 3:6].mean()}")
+
+        return points
     def _apply_transform(self, points):
         """Apply extrinsics transformation and scaling."""
         # Scale from mm to m (Orbbec specific)
@@ -348,6 +375,30 @@ def process_single_episode(episode_path, preprocessor=None, downsample_factor=3)
             processed_pc = preprocessor.process(pc)
             processed_pointclouds.append(processed_pc)
         aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
+    
+    if preprocessor is not None:
+        original_actions = aligned_action['action']
+        processed_actions = []
+        
+        for action_7d in original_actions:
+            pose_6d = action_7d[:6]
+            gripper = action_7d[6]
+
+            translation = pose_6d[:3]
+            rotation = pose_6d[3:6]
+            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
+
+            T_k_matrix = robot_to_base @ eef_to_robot_base_k
+            transformed_pose_6d = rise_tf.mat_to_xyz_rot(
+                T_k_matrix,
+                rotation_rep='euler_angles',
+                rotation_rep_convention='XYZ'
+            )
+
+            new_action_7d = np.concatenate([transformed_pose_6d, [gripper]])
+            processed_actions.append(new_action_7d)
+        
+        aligned_action['action'] = np.array(processed_actions, dtype=np.float32)
     
     # Combine obs and action data
     episode_data = {}

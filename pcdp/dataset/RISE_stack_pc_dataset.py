@@ -161,32 +161,6 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         val_set.split = 'val'
         return val_set
 
-    def _augmentation(self, clouds, tcps_euler):
-        # To correctly augment, we should convert euler to a rotation matrix/quaternion,
-        # apply transformations, and then convert back if needed.
-        # For simplicity, let's assume the augmentation function handles this.
-        # We will convert to quaternion here before passing to augmentation.
-        tcps_quat = xyz_rot_transform(tcps_euler, from_rep="euler_angles", to_rep="quaternion", from_convention="XYZ")
-
-        translation_offsets = np.random.rand(3) * (self.aug_trans_max - self.aug_trans_min) + self.aug_trans_min
-        rotation_angles = np.random.rand(3) * (self.aug_rot_max - self.aug_rot_min) + self.aug_rot_min
-        rotation_angles = rotation_angles / 180 * np.pi
-        aug_mat = rot_trans_mat(translation_offsets, rotation_angles)
-        
-        center = clouds[-1][..., :3].mean(axis=0)
-
-        for i in range(len(clouds)):
-            clouds[i][..., :3] -= center
-            clouds[i] = apply_mat_to_pcd(clouds[i], aug_mat)
-            clouds[i][..., :3] += center
-
-        tcps_quat[..., :3] -= center
-        tcps_quat = apply_mat_to_pose(tcps_quat, aug_mat, rotation_rep="quaternion")
-        tcps_quat[..., :3] += center
-
-        # Convert back to euler angles for consistency if other parts of the code expect it
-        tcps_aug_euler = xyz_rot_transform(tcps_quat, from_rep="quaternion", to_rep="euler_angles", to_convention="XYZ")
-        return clouds, tcps_aug_euler
 
     def _normalize_tcp(self, tcp_list):
         # Assuming tcp_list is (N, 9) for 6D rot or (N, 7) for euler+gripper
@@ -214,46 +188,16 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         # Action is (T, 7) with (x,y,z, r,p,y, gripper)
         actions_euler = data['action'].astype(np.float32)
 
-        # Color jitter
-        if self.split == 'train' and self.aug_jitter:
-            jitter_transform = T.ColorJitter(
-                brightness=self.aug_jitter_params[0],
-                contrast=self.aug_jitter_params[1],
-                saturation=self.aug_jitter_params[2],
-                hue=self.aug_jitter_params[3]
-            )
-            jitter = T.RandomApply([jitter_transform], p=self.aug_jitter_prob)
-            
-            for i in range(len(clouds)):
-                cloud_colors = (clouds[i][:, 3:] * 255).astype(np.uint8)
-                # To apply torchvision transforms, data needs to be in (H, W, C) or (C, H, W).
-                # A point cloud is an unordered set. A simple reshape might not be meaningful.
-                # As a simple workaround, we treat the points as a 1D image (1, N, 3).
-                pil_img = Image.fromarray(cloud_colors.reshape(1, -1, 3))
-                jittered_img = jitter(pil_img)
-                jittered_colors = np.array(jittered_img).reshape(-1, 3) / 255.0
-                clouds[i][:, 3:] = jittered_colors.astype(np.float32)
-        
-        # Normalize colors
-        for i in range(len(clouds)):
-            clouds[i][:, 3:] = clouds[i][:, 3:] / 255.0
-        for i in range(len(clouds)):
-            clouds[i][:, 3:] = (clouds[i][:, 3:] - IMG_MEAN) / IMG_STD
-
-        # Point cloud augmentation
-        if self.split == 'train' and self.aug:
-            clouds, actions_euler = self._augmentation(clouds, actions_euler)
-
         # =========== 2. MODIFIED: Action Representation Conversion ===========
         # Convert action from Euler angles to 6D representation for the policy
         pose_euler = actions_euler[:, :6]
         gripper_action = actions_euler[:, 6:]
 
-        pose_6d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
+        pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
         
-        actions_7d = np.concatenate([pose_6d, gripper_action], axis=-1)
+        actions_10d = np.concatenate([pose_9d, gripper_action], axis=-1)
         # Normalize actions
-        actions_normalized = self._normalize_tcp(actions_7d.copy())
+        actions_normalized = self._normalize_tcp(actions_10d.copy())
 
         # Voxelize for MinkowskiEngine
         input_coords_list = []
@@ -266,7 +210,7 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         return {
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
-            'action': torch.from_numpy(actions_7d).float(),
+            'action': torch.from_numpy(actions_10d).float(),
             'action_normalized': torch.from_numpy(actions_normalized).float(),
             'action_euler': torch.from_numpy(actions_euler).float()
         }

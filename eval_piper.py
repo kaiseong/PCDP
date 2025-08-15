@@ -23,8 +23,46 @@ from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 
+
+robot_to_base = np.array([
+    [1.,         0.,         0.,          -0.04],
+    [0.,         1.,         0.,         -0.29],
+    [0.,         0.,         1.,          -0.03],
+    [0.,         0.,         0.,          1.0]
+])
+
+
 # Hydra 설정 등록
 OmegaConf.register_new_resolver("eval", eval, replace=True)
+
+
+import numpy as np
+from pcdp.common import RISE_transformation as rise_tf
+
+def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
+    
+    base_to_robot_matrix = np.linalg.inv(robot_to_base_matrix)
+    original_poses = []
+    for action in transformed_action_6d:
+        translation = action[:3]
+        rotation = action[3:6]
+        transformed_matrix = rise_tf.rot_trans_mat(translation, rotation)
+
+        # 순방향: T_k = robot_to_base @ eef_to_robot_base_k
+        # 역방향: eef_to_robot_base_k = inv(robot_to_base) @ T_k
+        original_matrix = base_to_robot_matrix @ transformed_matrix
+
+        # 5. 원래의 4x4 행렬을 다시 6D pose [x,y,z,r,p,y] 벡터로 변환합니다.
+        original_pose_6d = rise_tf.mat_to_xyz_rot(
+            original_matrix,
+            rotation_rep='euler_angles',
+            rotation_rep_convention='XYZ'
+        )
+        original_poses.append(original_pose_6d)
+
+
+    return original_poses
+
 
 def _unnormalize_action(action_6d):
     """
@@ -170,8 +208,10 @@ def main(input, output, match_episode, frequency):
                             to_rep="euler_angles",
                             to_convention="XYZ"
                         )
-                        euler = xyz_euler[:, 3:6]
-                        action_sequence_7d = np.concatenate([pos, euler, grip], axis=-1)
+
+                        TF_xyz_euler = revert_action_transformation(xyz_euler, robot_to_base)
+                        action_sequence_7d = np.concatenate([TF_xyz_euler, grip], axis=-1)
+                        
                         # 4. 로봇 제어
                         now = mono_time.now_s()
                         timestamps = now + np.arange(len(action_sequence_7d)) * dt

@@ -29,17 +29,25 @@ camera_to_base = np.array([
     ])
 
 workspace_bounds = np.array([
-    [-0.800, 0.800],    # X range (milli meters)
-    [-0.500, 0.500],    # Y range (milli meters)
-    [-0.100, 0.350]     # Z range (milli meters)
+    [-0.000, 0.740],    # X range (m)
+    [-0.400, 0.350],    # Y range (m)
+    [-0.100, 0.400]     # Z range (m)
 ])
 
+
 robot_to_base = np.array([
-    [1.,         0.,         0.,          0.04],
+    [1.,         0.,         0.,          -0.04],
     [0.,         1.,         0.,         -0.29],
     [0.,         0.,         1.,          -0.03],
     [0.,         0.,         0.,          1.0]
 ])
+
+
+z_offset = np.array([
+    [1, 0, 0, 0], 
+    [0, 1, 0, 0], 
+    [0, 0, 1, 0.07], 
+    [0, 0, 0, 1]])
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -60,8 +68,9 @@ def main():
     print(f"[INFO] dataset sequences: {len(ds)}")
 
     # 2) DataLoader (시각화용)
+    
     dl = DataLoader(ds, batch_size=BATCH_SIZE_VIS,
-                    num_workers=10, shuffle=False, collate_fn=collate_fn)
+                    num_workers=20, shuffle=False, collate_fn=collate_fn)
     batch_iter = iter(dl)
     batch = None
     sample_idx = 0
@@ -78,76 +87,84 @@ def main():
     base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
     camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
     camera_frame.transform(camera_to_base)
-    last_eef_transform = np.identity(4)
+    eef_frame_ref = None
 
     first_loaded = False
     running = True
 
     while running:
         try:
-            if batch is None or sample_idx >= BATCH_SIZE_VIS:
-                batch = next(batch_iter)
-                sample_idx = 0
+            # Load a new batch
+            print("\nLoading next batch...")
+            batch = next(batch_iter)
+            
+            # Play back each sample in the batch as a separate "video"
+            for sample_idx in range(BATCH_SIZE_VIS):
+                if not running: break
 
-            # collated batch에서 현재 sample_idx에 해당하는 데이터 추출
-            coords = batch['input_coords_list']
-            feats = batch['input_feats_list']
-            action_euler = batch['action_euler']
-            
-            point_indices = (coords[:, 0] == sample_idx)
-            
-            if not torch.any(point_indices):
-                sample_idx += 1
-                continue
+                print(f"\nPlaying trajectory for sample {sample_idx} from batch...")
+                
+                # The dataset provides a sequence of actions, but only the point cloud for the first timestep.
+                # We will display the first point cloud and animate the full action sequence over it.
+                point_indices = (batch['input_coords_list'][:, 0] == sample_idx)
+                if not torch.any(point_indices):
+                    print(f"[WARN] No points for sample_idx {sample_idx}. Skipping.")
+                    continue
 
-            pc = feats[point_indices].numpy()
-            action = action_euler[sample_idx, 0].numpy()
-            
-            # 데이터 처리
-            xyz, rgb = pc[:, :3], pc[:, 3:6]
-            IMG_MEAN = np.array([0.0217, 0.0217, 0.0217])
-            IMG_STD = np.array([0.1474, 0.1474, 0.1474])
-            rgb = np.clip(rgb * IMG_STD + IMG_MEAN, 0, 1)
+                pc = batch['input_feats_list'][point_indices].numpy()
+                xyz, rgb = pc[:, :3], pc[:, 3:6]
+                IMG_MEAN = np.array([0.1234, 0.1234, 0.1234])
+                IMG_STD = np.array([0.2620, 0.2710, 0.2709])
+                rgb = np.clip(rgb * IMG_STD + IMG_MEAN, 0, 1)
+                pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float32))
+                pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float32))
 
-            pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float32))
-            pcd.colors = o3d.utility.Vector3dVector(rgb.astype(np.float32))
+                # Animate the full action sequence for this sample
+                action_sequence = batch['action_euler'][sample_idx]
             
-            # EEF 좌표계 업데이트
-            z_offset = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0.01], [0, 0, 0, 1]])
-            eef_to_robot_base = rise_tf.rot_trans_mat(action[:3], action[3:6])
-            current_eef_transform = robot_to_base @ eef_to_robot_base @ z_offset
-            
-            transform_to_apply = current_eef_transform @ np.linalg.inv(last_eef_transform)
-            eef_frame.transform(transform_to_apply)
-            last_eef_transform = current_eef_transform
-
-            if not first_loaded:
-                vis.add_geometry(pcd)
-                vis.add_geometry(base_frame)
-                vis.add_geometry(camera_frame)
-                vis.add_geometry(eef_frame)
-                ctr = vis.get_view_control()
-                bbox = pcd.get_axis_aligned_bounding_box()
-                if not bbox.is_empty():
-                    ctr.set_lookat(bbox.get_center())
-                    ctr.set_front([0.0, 0.0, -1.0])
-                    ctr.set_up([0.0, -1.0, 0.0])
-                    ctr.set_zoom(0.5)
-                first_loaded = True
-            else:
-                vis.update_geometry(pcd)
-                vis.update_geometry(eef_frame)
-            
-            sample_idx += 1
+                if not running: break
+                
+                action = action_sequence[0].numpy()
+                
+                # EEF 좌표계 업데이트 (절대 변환)
+                eef_to_robot_base = rise_tf.rot_trans_mat(action[:3], action[3:6])
+                current_eef_transform = eef_to_robot_base
+                # 이전 프레임 제거 및 새 프레임 추가 (Stateless rendering)
+                if eef_frame_ref is not None:
+                    vis.remove_geometry(eef_frame_ref, reset_bounding_box=False)
+                eef_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+                eef_frame.transform(current_eef_transform)
+                vis.add_geometry(eef_frame, reset_bounding_box=False)
+                eef_frame_ref = eef_frame
+                # 최초 로딩 시에만 전체 지오메트리 추가 및 카메라 설정
+                if not first_loaded:
+                    vis.add_geometry(pcd)
+                    vis.add_geometry(base_frame)
+                    vis.add_geometry(camera_frame)
+                    ctr = vis.get_view_control()
+                    bbox = pcd.get_axis_aligned_bounding_box()
+                    if not bbox.is_empty():
+                        ctr.set_lookat(bbox.get_center())
+                        ctr.set_front([0.0, 0.0, -1.0])
+                        ctr.set_up([0.0, -1.0, 0.0])
+                        ctr.set_zoom(0.5)
+                    first_loaded = True
+                else:
+                    # 포인트 클라우드는 매 시퀀스 시작 시 한 번만 업데이트
+                    vis.update_geometry(pcd)
+                
+                # 렌더링 및 이벤트 처리
+                if not vis.poll_events():
+                    running = False
+                vis.update_renderer()
+                time.sleep(1 / PLAYBACK_SPEED_FPS)
 
         except StopIteration:
             print("✔ 모든 샘플 확인 완료!")
-            running = False # 모든 배치를 다 돌았으면 종료
+            running = False
         
         if not vis.poll_events():
             running = False
-        vis.update_renderer()
-        time.sleep(1 / PLAYBACK_SPEED_FPS)
 
     vis.destroy_window()
 
