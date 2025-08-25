@@ -1,5 +1,5 @@
-# RISE_stack.yaml
-name: RISE_stack
+# PCDP_stack.yaml
+name: PCDP_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
@@ -11,44 +11,32 @@ shape_meta: &shape_meta
     pointcloud:
       shape: ${task.pointcloud_shape}
       type: pointcloud
-    robot_eef_pose:
-      shape: [6]  # 6DOF + gripper
+    robot_obs:
+      shape: [7]  # 6DOF + gripper_width
       type: low_dim
-    # robot_joint:
-    #   shape: [7]  # 7개 관절
-    #   type: low_dim
-    robot_gripper:
-      shape: [3]
-      type: low_dim
-    # align_timestamp:
-    #   shape: [1]
-    #   type: low_dim
+  
   action: 
-    shape: [7]  # 6DOF + gripper
+    shape: [7]  # 6DOF + gripper_toggle
 
 
 env_runner:
-  _target_: pcdp.env_runner.RISE_runner.RISEPointCloudRunner
+  _target_: pcdp.env_runner.PCDP_runner.PCDPPointCloudRunner
 
 dataset:
-  _target_: pcdp.dataset.RISE_stack_pc_dataset.RISE_RealStackPointCloudDataset
+  _target_: pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
-  horizon: 20
-  n_obs_steps: 1
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
   use_cache: True
-  voxel_size: 0.005
   seed: 233
-  val_ratio: 0.1
+  val_ratio: 0.00
   max_train_episodes: null
-  aug: False
-  aug_trans_min: [-0.2, -0.2, -0.2]
-  aug_trans_max: [0.2, 0.2, 0.2]
-  aug_rot_min: [-30, -30, -30]
-  aug_rot_max: [30, 30, 30]
-  aug_jitter: False
-  aug_jitter_params: [0.4, 0.4, 0.2, 0.1]
-  aug_jitter_prob: 0.2
+  voxel_size: 0.005
+  
 
   enable_pc_preprocessing: True
   pc_preprocessor_config:
@@ -84,6 +72,3 @@ dataset:
       - [0., 0., 1., -0.03]
       - [0., 0., 0., 1.]
     
-
-
-

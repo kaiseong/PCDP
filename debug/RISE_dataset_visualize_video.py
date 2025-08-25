@@ -54,7 +54,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 # ────────────────────────────────────────────────────────────
 # 설정 – 프로젝트에 맞게 YAML 경로/이름만 바꿔 주세요
 CONFIG_DIR  = "../pcdp/config"    # your yaml folder
-CONFIG_NAME = "train_diffusion_RISE_workspace"
+CONFIG_NAME = "train_diffusion_PCDP_workspace"
 BATCH_SIZE_VIS = 10       # cfg.dataloader.batch_size 와 동일하게
 PLAYBACK_SPEED_FPS = 30   # 영상 재생 속도 (Hz)
 # ────────────────────────────────────────────────────────────

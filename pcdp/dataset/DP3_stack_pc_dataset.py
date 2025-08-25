@@ -15,16 +15,12 @@ from pcdp.common.pytorch_util import dict_apply
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
 from pcdp.common.replay_buffer import ReplayBuffer
-from pcdp.real_world.real_data_pc_conversion import _get_replay_buffer, PointCloudPreprocessor
+from pcdp.real_world.real_data_pc_conversion import _get_replay_buffer, PointCloudPreprocessor, LowDimPreprocessor
 from pcdp.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
-from pcdp.common.normalize_util import (
-    get_range_normalizer_from_stat,
-    get_identity_normalizer_from_stat,
-    array_to_stats
-)
 
-class RealStackPointCloudDataset(BasePointCloudDataset):
+
+class DP3_RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
             dataset_path: str,
@@ -38,8 +34,10 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             val_ratio=0.0,
             max_train_episodes=None,
             # Preprocessing parameters (configurable via YAML)
-            enable_preprocessing=True,
-            preprocessor_config=None
+            enable_pc_preprocessing=True,
+            pc_preprocessor_config=None,
+            enable_low_dim_preprocessing=True,
+            low_dim_preprocessor_config=None,
         ):
         """
         Pointcloud-based dataset for Piper robot demonstrations.
@@ -56,16 +54,20 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             seed: Random seed for reproducibility
             val_ratio: Ratio of episodes to use for validation
             max_train_episodes: Maximum number of training episodes to use
-            enable_preprocessing: Whether to enable pointcloud preprocessing
-            preprocessor_config: Configuration for pointcloud preprocessing
+            enable_pc_preprocessing: Whether to enable pointcloud preprocessing
+            pc_preprocessor_config: Configuration for pointcloud preprocessing
         """
         assert os.path.isdir(dataset_path), f"Dataset path does not exist: {dataset_path}"
         
         # Setup preprocessor if enabled
-        preprocessor = None
-        if enable_preprocessing:
-            preprocessor = self._create_preprocessor(preprocessor_config or {})
+        pc_preprocessor = None
+        if enable_pc_preprocessing:
+            pc_preprocessor = PointCloudPreprocessor(**(pc_preprocessor_config or {}))
         
+        low_dim_preprocessor = None
+        if enable_low_dim_preprocessing:
+            low_dim_preprocessor = LowDimPreprocessor(**(low_dim_preprocessor_config or {}))
+
         replay_buffer = None
         if use_cache:
             # fingerprint shape_meta for cache validation
@@ -83,7 +85,8 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
                             dataset_path=dataset_path,
                             shape_meta=shape_meta,
                             store=zarr.MemoryStore(),
-                            preprocessor=preprocessor
+                            pc_preprocessor=pc_preprocessor,
+                            lowdim_preprocessor=low_dim_preprocessor
                         )
                         print('Saving cache to disk.')
                         with zarr.ZipStore(cache_zarr_path) as zip_store:
@@ -105,7 +108,8 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
                 dataset_path=dataset_path,
                 shape_meta=shape_meta,
                 store=zarr.MemoryStore(),
-                preprocessor=preprocessor
+                pc_preprocessor=pc_preprocessor,
+                lowdim_preprocessor=low_dim_preprocessor
             )
         
         # Parse shape meta to identify pointcloud and lowdim keys dynamically
@@ -196,29 +200,6 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         
         print(f"Validation passed: All expected keys found in replay buffer")
 
-    def _create_preprocessor(self, config: dict):
-        """
-        Create pointcloud preprocessor from configuration.
-        
-        Args:
-            config: Preprocessor configuration dictionary
-            
-        Returns:
-            PointCloudPreprocessor instance
-        """
-        
-        
-        return PointCloudPreprocessor(
-            extrinsics_matrix=config.get('extrinsics_matrix'),
-            workspace_bounds=config.get('workspace_bounds'),
-            target_num_points=config.get('target_num_points', 1024),
-            enable_transform=config.get('enable_transform', True),
-            enable_cropping=config.get('enable_cropping', True),
-            enable_sampling=config.get('enable_sampling', True),
-            use_cuda=config.get('use_cuda', True),
-            verbose=config.get('verbose', False)
-        )
-
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler = SequenceSampler(
@@ -228,7 +209,6 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
             pad_after=self.pad_after,
             episode_mask=self.val_mask
             )
-        val_set.val_mask = ~self.val_mask
         return val_set
 
     def get_normalizer(self, **kwargs) -> LinearNormalizer:
@@ -267,7 +247,6 @@ class RealStackPointCloudDataset(BasePointCloudDataset):
         # when self.n_obs_steps is None
         # this slice does nothing (takes all)
         T_slice = slice(self.n_obs_steps)
-
         obs_dict = dict()
         
         # process pointcloud data

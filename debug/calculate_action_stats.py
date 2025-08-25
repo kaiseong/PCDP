@@ -1,70 +1,90 @@
-import argparse
-import zarr
+import sys
+import os
+import pathlib
+from zipfile import ZipFile
 import numpy as np
+import click
+import zarr
+from tqdm import tqdm
 
-def main():
-    """
-    Calculates and prints the minimum and maximum values for the 'action' key
-    in a Zarr dataset. These values correspond to TRANS_MIN and TRANS_MAX
-    used for normalization in the training configuration.
-    """
-    parser = argparse.ArgumentParser(
-        description="Calculate TRANS_MIN and TRANS_MAX for a dataset's action data."
-    )
-    parser.add_argument(
-        '--dataset_path',
-        type=str,
-        required=True,
-        help="Path to the Zarr dataset file (e.g., 'data/your_dataset.zarr')."
-    )
-    parser.add_argument(
-        '--action-key',
-        type=str,
-        default='action',
-        help="The key for the action data in the Zarr dataset. Defaults to 'action'."
-    )
-    args = parser.parse_args()
-
-    print(f"Loading dataset from: {args.dataset_path}")
-
-    try:
-        dataset = zarr.open(args.dataset_path, 'r')
-    except Exception as e:
-        print(f"Error: Failed to open Zarr dataset at '{args.dataset_path}'.")
-        print(f"Details: {e}")
+@click.command()
+@click.option('-i', '--dataset-dir', required=True, help="Directory containing the zarr.zip dataset file.")
+def main(dataset_dir):
+    # Find the .zarr.zip file in the directory
+    dataset_dir = pathlib.Path(dataset_dir)
+    dataset_paths = list(dataset_dir.rglob('*.zarr.zip'))
+    if len(dataset_paths) == 0:
+        print(f"No .zarr.zip file found in {dataset_dir}")
         return
-
-    # Navigate to the correct data group
-    data_group = dataset
-    if 'data' in dataset and isinstance(dataset['data'], zarr.Group):
-        data_group = dataset['data']
-
-    # Check if the action key exists in the determined group
-    if args.action_key not in data_group:
-        print(f"Error: Action key '{args.action_key}' not found in the dataset.")
-        print(f"Available keys in the root group: {list(dataset.keys())}")
-        if 'data' in dataset and isinstance(dataset['data'], zarr.Group):
-            print(f"Available keys in the 'data' group: {list(dataset['data'].keys())}")
+    if len(dataset_paths) > 1:
+        print(f"Multiple .zarr.zip files found, please specify a more precise directory.")
         return
+    
+    dataset_path = dataset_paths[0]
+    print(f"Processing: {dataset_path}")
 
-    # Load action data into memory
-    action_data = data_group[args.action_key][:]
-    print(f"Successfully loaded action data with shape: {action_data.shape}")
+    # Load the dataset
+    with ZipFile(dataset_path, 'r') as zf:
+        with zf.open('data/episode_ends.json', 'r') as f:
+            episode_ends = np.array(eval(f.read()))
+        
+        root = zarr.open(zf)
+        data_group = root['data']
+        
+        all_trans = []
+        all_rots = []
+        all_gripper_widths = []
 
-    # Calculate min and max across the first axis (the sequence axis)
-    trans_min = np.min(action_data, axis=0)
-    trans_max = np.max(action_data, axis=0)
+        for episode_idx in tqdm(range(len(episode_ends)), desc="Calculating Stats"):
+            start_idx = 0
+            if episode_idx > 0:
+                start_idx = episode_ends[episode_idx-1]
+            end_idx = episode_ends[episode_idx]
+            
+            # tcp is (x,y,z,roll,pitch,yaw)
+            tcp_data = data_group['tcp'][start_idx:end_idx]
+            # gripper_width is a single value
+            gripper_width_data = data_group['gripper_width'][start_idx:end_idx]
+
+            all_trans.extend(tcp_data[:, :3])
+            all_rots.extend(tcp_data[:, 3:])
+            all_gripper_widths.extend(gripper_width_data)
+
+    # Convert to numpy arrays
+    all_trans = np.array(all_trans)
+    all_rots = np.array(all_rots)
+    all_gripper_widths = np.array(all_gripper_widths)
+
+    # Calculate stats
+    trans_stats = {
+        'min': np.min(all_trans, axis=0),
+        'max': np.max(all_trans, axis=0)
+    }
+    rots_stats = {
+        'min': np.min(all_rots, axis=0),
+        'max': np.max(all_rots, axis=0)
+    }
+    gripper_stats = {
+        'min': np.min(all_gripper_widths),
+        'max': np.max(all_gripper_widths)
+    }
 
     # Print the results in a copy-paste friendly format
-    print("\n" + "="*50)
-    print("Action Statistics")
-    print("-"*50)
-    print(f"TRANS_MIN: {trans_min.tolist()}")
-    print(f"TRANS_MAX: {trans_max.tolist()}")
-    print("="*50)
-    print("\nCopy and paste these lists into the 'normalize_min' and 'normalize_max' fields")
-    print("in your YAML configuration file (e.g., train_diffusion_RISE_workspace.yaml).")
+    print("\n" + "="*20)
+    print("Stats calculated successfully!")
+    print("Copy these values into your RISE_util.py file.")
+    print("="*20 + "\n")
+    
+    print("TRANS_MIN = [{:e}, {:e}, {:e}]".format(*trans_stats['min']))
+    print("TRANS_MAX = [{:e}, {:e}, {:e}]".format(*trans_stats['max']))
+    print("\n")
+    print("ROTS_MIN = [{:e}, {:e}, {:e}]".format(*rots_stats['min']))
+    print("ROTS_MAX = [{:e}, {:e}, {:e}]".format(*rots_stats['max']))
+    print("\n")
+    print("GRIPPER_WIDTH_MIN = {:e}".format(gripper_stats['min']))
+    print("GRIPPER_WIDTH_MAX = {:e}".format(gripper_stats['max']))
+    print("\n")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

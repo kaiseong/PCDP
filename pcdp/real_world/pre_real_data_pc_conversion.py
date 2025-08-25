@@ -6,6 +6,7 @@ import numpy as np
 import zarr
 import numcodecs
 from tqdm import tqdm
+
 import torch
 try:
     import pytorch3d.ops as torch3d_ops
@@ -15,7 +16,6 @@ except ImportError:
     print("Warning: pytorch3d not available. FPS will use fallback method.")
 from pcdp.common import RISE_transformation as rise_tf
 from pcdp.common.replay_buffer import ReplayBuffer, get_optimal_chunks
-from pcdp.common.RISE_transformation import xyz_rot_transform
 
 robot_to_base = np.array([
     [1., 0., 0., -0.04],
@@ -36,7 +36,7 @@ class PointCloudPreprocessor:
                 enable_transform=True,
                 enable_cropping=True,
                 enable_sampling=True,
-                enable_rgb_normalize=True,
+                enable_normalize=True,
                 use_cuda=True,
                 verbose=False):
         """
@@ -87,7 +87,7 @@ class PointCloudPreprocessor:
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
-        self.enable_rgb_normalize = enable_rgb_normalize
+        self.enable_normalize = enable_normalize
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
         
@@ -119,7 +119,7 @@ class PointCloudPreprocessor:
         # Ensure points is float32
         points = points.astype(np.float32)
 
-        if self.enable_rgb_normalize:
+        if self.enable_normalize:
             points = self._apply_normalize(points)
         # Coordinate transformation
         if self.enable_transform:
@@ -242,51 +242,6 @@ class PointCloudPreprocessor:
             
         return sampled_points.numpy(), indices
 
-class LowDimPreprocessor:
-    def __init__(self,
-                 robot_to_base=None
-                ):
-        if robot_to_base is None:
-            np.array([
-                [1., 0., 0., -0.04],
-                [0., 1., 0., -0.29],
-                [0., 0., 1., -0.03],
-                [0., 0., 0.,  1.0]
-            ])
-        else:
-            self.robot_to_base = np.array(robot_to_base, dtype=np.float32)
-        
-    
-    def TF_process(self, robot_7ds):
-        assert robot_7ds.shape[-1] == 7, f"robot_7ds data shape shoud be (..., 7), but got {robot_7ds.shape}"
-        processed_robot7d = []
-        for robot_7d in robot_7ds:
-            pose_6d = robot_7d[:6]
-            gripper = robot_7d[6]
-            
-            translation = pose_6d[:3]
-            rotation = pose_6d[3:6]
-            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
-            T_k_matrix = self.robot_to_base @ eef_to_robot_base_k
-            transformed_pose_6d = rise_tf.mat_to_xyz_rot(
-                T_k_matrix,
-                rotation_rep='euler_angles',
-                rotation_rep_convention='XYZ'
-            )
-            new_robot_7d = np.concatenate([transformed_pose_6d, [gripper]])
-            processed_robot7d.append(new_robot_7d)
-        
-        return np.array(processed_robot7d, dtype=np.float32)
-
-
-
-
-
-        
-
-
-
-
 
 def create_default_preprocessor(target_num_points=1024, use_cuda=True, verbose=False):
     """Create a preprocessor with default settings."""
@@ -368,14 +323,13 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
 
 
 
-def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, downsample_factor=3):
+def process_single_episode(episode_path, preprocessor=None, downsample_factor=3):
     """
     Process a single episode: load, downsample, align, and optionally preprocess.
     
     Args:
         episode_path: Path to episode directory
-        pc_preprocessor: Optional PointCloudPreprocessor instance
-        lowdim_preprocessor: Optional LowDimPreprocessor instance
+        preprocessor: Optional PointCloudPreprocessor instance
         downsample_factor: Factor for downsampling obs data
         
     Returns:
@@ -411,29 +365,40 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
         downsampled_obs, action_data, 
         downsampled_obs_timestamps, action_timestamps)
     
-    
     if len(valid_indices) == 0:
         return None
         
     # Apply pointcloud preprocessing if provided
-    if pc_preprocessor is not None and 'pointcloud' in aligned_obs:
+    if preprocessor is not None and 'pointcloud' in aligned_obs:
         processed_pointclouds = []
         for pc in aligned_obs['pointcloud']:
-            processed_pc = pc_preprocessor.process(pc)
+            processed_pc = preprocessor.process(pc)
             processed_pointclouds.append(processed_pc)
         aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
     
-    
-    # Create robot_obs by concatenating pose and gripper width
-    robot_eef_pose = aligned_obs['robot_eef_pose']
-    robot_gripper_width = aligned_obs['robot_gripper'][:, :1] # Keep it as a column vector
-    aligned_obs['robot_obs'] = np.concatenate([robot_eef_pose, robot_gripper_width], axis=1) 
-    
+    if preprocessor is not None:
+        original_actions = aligned_action['action']
+        processed_actions = []
+        
+        for action_7d in original_actions:
+            pose_6d = action_7d[:6]
+            gripper = action_7d[6]
 
-    # TF to based on origin frames
-    if lowdim_preprocessor is not None:
-        aligned_obs['robot_obs'] = lowdim_preprocessor.TF_process(aligned_obs['robot_obs'])
-        aligned_action['action'] = lowdim_preprocessor.TF_process(aligned_action['action'])
+            translation = pose_6d[:3]
+            rotation = pose_6d[3:6]
+            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
+
+            T_k_matrix = robot_to_base @ eef_to_robot_base_k
+            transformed_pose_6d = rise_tf.mat_to_xyz_rot(
+                T_k_matrix,
+                rotation_rep='euler_angles',
+                rotation_rep_convention='XYZ'
+            )
+
+            new_action_7d = np.concatenate([transformed_pose_6d, [gripper]])
+            processed_actions.append(new_action_7d)
+        
+        aligned_action['action'] = np.array(processed_actions, dtype=np.float32)
     
     # Combine obs and action data
     episode_data = {}
@@ -544,8 +509,7 @@ def _get_replay_buffer(
         dataset_path: str,
         shape_meta: dict,
         store: Optional[zarr.ABSStore] = None,
-        pc_preprocessor: Optional[PointCloudPreprocessor] = None,
-        lowdim_preprocessor: Optional[LowDimPreprocessor] = None,
+        preprocessor: Optional[PointCloudPreprocessor] = None,
         downsample_factor: int = 3,
         max_episodes: Optional[int] = None,
         n_workers: int = 1
@@ -557,8 +521,7 @@ def _get_replay_buffer(
         dataset_path: Path to recorder_data directory containing episode folders
         shape_meta: Dictionary defining observation and action shapes/types
         store: Zarr store for output (if None, uses MemoryStore)
-        pc_preprocessor: Optional pointcloud preprocessor
-        lowdim_preprocessor: Optional lowdim preprocessor
+        preprocessor: Optional pointcloud preprocessor
         downsample_factor: Factor for downsampling obs data (30Hz -> 10Hz = 3)
         max_episodes: Maximum number of episodes to process
         n_workers: Number of worker processes (currently unused)
@@ -603,7 +566,7 @@ def _get_replay_buffer(
         for episode_dir in episode_dirs:
             try:
                 episode_data = process_single_episode(
-                    episode_dir, pc_preprocessor, lowdim_preprocessor, downsample_factor)
+                    episode_dir, preprocessor, downsample_factor)
                 
                 if episode_data is not None:
                     # Validate episode data against shape_meta

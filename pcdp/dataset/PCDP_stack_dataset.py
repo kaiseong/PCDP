@@ -1,4 +1,4 @@
-# RISE_stack_pc_dataset.py
+# pcdp_stack_dataset.py
 from typing import Dict, List
 import torch
 import numpy as np
@@ -11,9 +11,9 @@ import json
 import hashlib
 import copy
 import MinkowskiEngine as ME
-import torchvision.transforms as T
 import collections.abc as container_abcs
 
+from pcdp.common.pytorch_util import dict_apply
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.model.common.normalizer import LinearNormalizer
 from pcdp.common.replay_buffer import ReplayBuffer
@@ -26,7 +26,7 @@ from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 from pcdp.dataset.RISE_util import *
 from pcdp.common.RISE_transformation import xyz_rot_transform
 
-class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
+class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
             dataset_path: str,
@@ -44,21 +44,11 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             pc_preprocessor_config=None,
             enable_low_dim_preprocessing=True,
             low_dim_preprocessor_config=None,
-            # RISE specific params
-            aug=False,
-            aug_trans_min=None,
-            aug_trans_max=None,
-            aug_rot_min=None,
-            aug_rot_max=None,
-            aug_jitter=False,
-            aug_jitter_params=None,
-            aug_jitter_prob=0.2,
-            split='train'
         ):
 
-        # =========== 1. ADDED: Data Loading Logic ===========
-        # This section was missing and is now added to actually load data.
-        super().__init__() # Call parent __init__ but don't pass args
+        super().__init__() 
+
+        assert os.path.isdir(dataset_path), f"Dataset path does not exist: {dataset_path}"
 
         pc_preprocessor = None
         if enable_pc_preprocessing:
@@ -68,7 +58,6 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         if enable_low_dim_preprocessing:
             low_dim_preprocessor = LowDimPreprocessor(**(low_dim_preprocessor_config or {}))
         
-
 
         replay_buffer = None
         if use_cache:
@@ -109,6 +98,18 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         pointcloud_keys = [k for k, v in shape_meta.obs.items() if v.type == 'pointcloud']
         lowdim_keys = [k for k, v in shape_meta.obs.items() if v.type == 'low_dim']
         
+        print(f"  - Pointcloud keys: {pointcloud_keys}")
+        print(f"  - Low-dim keys: {lowdim_keys}")
+
+        self.check_replay_buffer_keys(replay_buffer, pointcloud_keys, lowdim_keys)
+        
+
+        key_first_k = dict()
+        if n_obs_steps is not None:
+            # only take first k obs from pointcloud and lowdim data
+            for key in pointcloud_keys + lowdim_keys:
+                key_first_k[key] = n_obs_steps
+
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
@@ -121,16 +122,16 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                 max_n=max_train_episodes, 
                 seed=seed)
         
-        episode_mask = train_mask if split =='train' else val_mask
-
-        self.sampler = SequenceSampler(
+        sampler = SequenceSampler(
             replay_buffer=replay_buffer, 
             sequence_length=horizon+n_latency_steps,
             pad_before=pad_before, 
             pad_after=pad_after,
-            episode_mask=episode_mask)
+            episode_mask=train_mask,
+            key_first_k=key_first_k)
         
         self.replay_buffer = replay_buffer
+        self.sampler = sampler
         self.shape_meta = shape_meta
         self.pointcloud_keys = pointcloud_keys
         self.lowdim_keys = lowdim_keys
@@ -139,21 +140,40 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         self.pad_after = pad_after
         self.val_mask = val_mask
         self.horizon = horizon
-        # =======================================================
-
-        # Add RISE-specific augmentation and processing parameters
-        self.aug = aug
-        self.aug_trans_min = np.array(aug_trans_min if aug_trans_min is not None else [-0.2, -0.2, -0.2])
-        self.aug_trans_max = np.array(aug_trans_max if aug_trans_max is not None else [0.2, 0.2, 0.2])
-        self.aug_rot_min = np.array(aug_rot_min if aug_rot_min is not None else [-30, -30, -30])
-        self.aug_rot_max = np.array(aug_rot_max if aug_rot_max is not None else [30, 30, 30])
-        self.aug_jitter = aug_jitter
-        self.aug_jitter_params = np.array(aug_jitter_params if aug_jitter_params is not None else [0.4, 0.4, 0.2, 0.1])
-        self.aug_jitter_prob = aug_jitter_prob
         self.voxel_size = voxel_size
-        self.split = split
         self.n_latency_steps = n_latency_steps
     
+    def check_replay_buffer_keys(self, replay_buffer: ReplayBuffer, pointcloud_keys: List[str], lowdim_keys: List[str]):
+        """
+        Validate that replay buffer contains all expected keys from shape_meta.
+        
+        Args:
+            replay_buffer: The loaded replay buffer
+            pointcloud_keys: Expected pointcloud keys
+            lowdim_keys: Expected lowdim keys
+        """
+        
+        buffer_keys = set(replay_buffer.keys())
+        
+        # Check pointcloud keys
+        for key in pointcloud_keys:
+            if key not in buffer_keys:
+                raise ValueError(f"Expected pointcloud key '{key}' not found in replay buffer. "
+                               f"Available keys: {list(buffer_keys)}")
+        
+        # Check lowdim keys
+        for key in lowdim_keys:
+            if key not in buffer_keys:
+                raise ValueError(f"Expected lowdim key '{key}' not found in replay buffer. "
+                               f"Available keys: {list(buffer_keys)}")
+        
+        # Check action key
+        if 'action' not in buffer_keys:
+            raise ValueError("Expected 'action' key not found in replay buffer. "
+                           f"Available keys: {list(buffer_keys)}")
+        
+        print(f"Validation passed: All expected keys found in replay buffer")
+
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler =SequenceSampler(
@@ -164,18 +184,20 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             episode_mask=self.val_mask
         )
         val_set.val_mask = self.val_mask
-        val_set.split = 'val'
         return val_set
 
 
-    def _normalize_tcp(self, tcp_list):
+    def _normalize_(self, tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
         # Assuming tcp_list is (N, 9) for 6D rot or (N, 7) for euler+gripper
         # This needs to be robust to the input shape.
-        tcp_list[:, :3] = (tcp_list[:, :3] - ACTION_TRANS_MIN) / (ACTION_TRANS_MAX - ACTION_TRANS_MIN) * 2 - 1
+        tcp_list[:, :3] = (tcp_list[:, :3] - trans_min) / (trans_max - trans_min) * 2 - 1
         # Normalize gripper which is the last element
         # The user's dataset uses binary gripper values (0 for closed, 1 for open).
         # Map 0 to -1 and 1 to 1.
-        tcp_list[:, -1] = tcp_list[:, -1] * 2 - 1
+        if grip_max is not None and grip_min is not None:
+            tcp_list[:, -1] = (tcp_list[:, -1] - grip_min ) / (grip_max - grip_min) *2 -1
+        else:
+            tcp_list[:, -1] = tcp_list[:, -1] * 2 - 1
         return tcp_list
 
     def __len__(self):
@@ -190,7 +212,9 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         obs_dict = {key: data[key][T_slice] for key in self.pointcloud_keys + self.lowdim_keys}
         
         clouds = [obs_dict['pointcloud'][i].astype(np.float32) for i in range(self.n_obs_steps)]
+        robot_obs = np.array([obs_dict['robot_obs'][i] for i in range(self.n_obs_steps)], dtype=np.float32)
         
+
         # Action is (T, 7) with (x,y,z, r,p,y, gripper)
         actions_euler = data['action'].astype(np.float32)
 
@@ -202,8 +226,19 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
         
         actions_10d = np.concatenate([pose_9d, gripper_action], axis=-1)
+
+        obs_pose_euler = robot_obs[:, :6]
+        obs_gripper = robot_obs[:, 6:]
+        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='XYZ')
+        
+        obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
+        robot_obs = obs_10d
+
+
         # Normalize actions
-        actions_normalized = self._normalize_tcp(actions_10d.copy())
+        actions_normalized = self._normalize_(actions_10d.copy(), ACTION_TRANS_MAX, ACTION_TRANS_MIN)
+        # Normalize obs
+        robot_obs = self._normalize_(robot_obs, OBS_TRANS_MAX, OBS_TRANS_MIN, OBS_GRIP_MAX, OBS_GRIP_MIN)
 
         # Voxelize for MinkowskiEngine
         input_coords_list = []
@@ -216,6 +251,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         return {
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
+            'robot_obs': torch.from_numpy(robot_obs).float(),
             'action': torch.from_numpy(actions_10d).float(),
             'action_normalized': torch.from_numpy(actions_normalized).float(),
             'action_euler': torch.from_numpy(actions_euler).float()
@@ -232,29 +268,29 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             normalizer[key] = SingleFieldLinearNormalizer.create_identity()
         return normalizer
 
-# RISE-specific collate function
 def collate_fn(batch):
     if not isinstance(batch, list):
         return batch
     
     elem = batch[0]
-    if isinstance(elem, container_abcs.Mapping):
-        ret_dict = {}
-        for key in elem:
-            if key in ['action', 'action_normalized', 'action_euler']:
-                ret_dict[key] = torch.stack([d[key] for d in batch], 0)
-            elif key in ['input_coords_list', 'input_feats_list']:
-                flat_list = [item for sublist in [d[key] for d in batch] for item in sublist]
-                if key == 'input_coords_list':
-                    coords_list = flat_list
-                else:
-                    feats_list = flat_list
-            else:
-                ret_dict[key] = [d[key] for d in batch]
+    if not isinstance(elem, container_abcs.Mapping):
+        raise TypeError(f"Batch must contain dicts, but found {type(elem)}")
+    
+    ret_dict = {}
+    coords_list = list()
+    feats_list = list()
 
-        coords_batch, feats_batch = ME.utils.sparse_collate(coords_list, feats_list)
+    for key in elem:
+        if key in ['input_coords_list', 'input_feats_list']:
+            flat_list = [item for d in batch for item in d[key]]
+            if key == 'input_coords_list':
+                coords_list.extend(flat_list)
+            else:
+                feats_list.extend(flat_list)
+        else:
+            ret_dict[key] = torch.stack([d[key] for d in batch], dim =0)
+    if coords_list and feats_list:
+        coords_batch, feats_batch = ME.utils.sparse_collate(coords=coords_list, feats=feats_list)
         ret_dict['input_coords_list'] = coords_batch
         ret_dict['input_feats_list'] = feats_batch
-        return ret_dict
-
-    raise TypeError(f"Batch must contain dicts, but found {type(elem)}")
+    return ret_dict

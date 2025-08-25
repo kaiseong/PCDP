@@ -66,7 +66,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 # ────────────────────────────────────────────────────────────
 # 설정 – 프로젝트에 맞게 YAML 경로/이름만 바꾸세요
 CONFIG_DIR  = "../pcdp/config"                 # your yaml folder
-CONFIG_NAME = "train_diffusion_RISE_workspace" # your yaml name
+CONFIG_NAME = "train_diffusion_PCDP_workspace" # your yaml name
 BATCH_SIZE_VIS = 10                            # cfg.dataloader.batch_size 와 동일 권장
 NUM_WORKERS = 10
 # ────────────────────────────────────────────────────────────
@@ -169,7 +169,6 @@ def main():
 
             for k in range(0, k_max + 1):
                 act_k = action_euler[sample_idx, k].numpy()  # [x, y, z, roll, pitch, yaw]
-                breakpoint()
                 eef_to_robot_base_k = rise_tf.rot_trans_mat(act_k[:3], act_k[3:6])
                 # T_k = robot_to_base @ eef_to_robot_base_k @ z_offset
                 T_k = eef_to_robot_base_k 
