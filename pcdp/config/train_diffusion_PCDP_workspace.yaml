@@ -40,7 +40,7 @@ ema:
 
 dataloader:
   batch_size: 200
-  num_workers: 20
+  num_workers: 10
   shuffle: True
   pin_memory: True
   persistent_workers: False
@@ -48,7 +48,7 @@ dataloader:
 
 val_dataloader:
   batch_size: 128
-  num_workers: 20
+  num_workers: 10
   shuffle: False
   pin_memory: True
   persistent_workers: False

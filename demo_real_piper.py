@@ -51,11 +51,11 @@ workspace_bounds = np.array([
 
 @click.command()
 @click.option('--output', '-o', required=True, default ="demo_dataset", help="Directory to save demonstration dataset.")
-@click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
+@click.option('--visual', default=False, type=bool, help="Which visualize.")
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
-def main(output, vis_camera_idx, init_joints, frequency, command_latency):
+def main(output, visual, init_joints, frequency, command_latency):
     dt = 1/frequency
     
     # IK parameters
@@ -91,16 +91,17 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
             print('Ready!')
             preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                                 workspace_bounds=workspace_bounds,
-                                                enable_sampling=False)
+                                                enable_sampling=False,
+                                                enable_rgb_normalize=False)
             state = env.get_robot_state()
             target_pose = base_pose.copy()
             t_start = mono_time.now_s()
             iter_idx = 0
             stop = False
             is_recording = False
-            visual= False
+            visual_= visual
 
-            if visual:
+            if visual_:
                 # open3d visualization
                 vis = o3d.visualization.Visualizer()
                 vis.create_window(window_name='default', width=1280, height=720)
@@ -156,7 +157,7 @@ def main(output, vis_camera_idx, init_joints, frequency, command_latency):
                 if is_recording:
                     text += ', Recording!'
                 
-                if visual:
+                if visual_:
                     vis_pc = obs["pointcloud"][-1].copy()
                     vis_pc = np.asarray(vis_pc)
                     vis_pc = preprocessor(vis_pc)

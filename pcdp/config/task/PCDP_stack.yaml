@@ -3,7 +3,7 @@ name: PCDP_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/test/recorder_data
+dataset_path: data/simple_stack/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -62,8 +62,8 @@ dataset:
       - [-0.100, 0.400]    # Z range (meters)
     
     # normalize rgb values
-    rgb_mean: [0.1234, 0.1234, 0.1234]
-    rgb_std: [0.2620, 0.2710, 0.2709]
+    rgb_mean: [0.0967, 0.0967, 0.0967]
+    rgb_std: [0.2430, 0.2447, 0.2447]
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:
     robot_to_base:

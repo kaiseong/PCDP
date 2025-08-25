@@ -26,7 +26,6 @@ robot_to_base = np.array([
 
 class PointCloudPreprocessor:
     """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
-    
     def __init__(self, 
                 extrinsics_matrix=None,
                 workspace_bounds=None,
