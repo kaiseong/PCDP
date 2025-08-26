@@ -1,5 +1,8 @@
 import numpy as np
 
+IMG_MEAN = np.array([0.0967, 0.0967, 0.0967])
+IMG_STD = np.array([0.2430, 0.2447, 0.2447])
+
 # tcp normalization and gripper width normalization
 ACTION_TRANS_MAX = np.array([0.408983, 0.026530, 0.341521]) 
 ACTION_TRANS_MIN = np.array([0.089008, -0.335518, 0.058755]) 

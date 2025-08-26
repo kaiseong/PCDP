@@ -19,9 +19,10 @@ from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
 from pcdp.policy.diffusion_RISE_policy import RISEPolicy
+from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
-from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 
 
 robot_to_base = np.array([
@@ -64,22 +65,31 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
     return original_poses
 
 
-def _unnormalize_action(action_6d):
+def _unnormalize_action(action_10d):
     """
     주어진 6D 회전 표현 액션을 역정규화합니다.
     action_6d: (N, 10) 크기의 배열 - [x, y, z, rot_6d(6), gripper(1)]
     """
     # TRANS_MIN/MAX는 (3,) 크기이므로 앞 3개 요소에만 적용
-    trans_min_exp = torch.from_numpy(TRANS_MIN).to(action_6d.device).float()
-    trans_max_exp = torch.from_numpy(TRANS_MAX).to(action_6d.device).float()
+    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_10d.device).float()
+    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_10d.device).float()
     
     # 위치 역정규화: [-1, 1] -> [min, max]
-    action_6d[..., :3] = (action_6d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
+    action_10d[..., :3] = (action_10d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
     
     # 그리퍼 역정규화: [-1, 1] -> [0, 1] (0: closed, 1: open)
     # RISE의 그리퍼 값은 너비가 아닌 상태를 나타내므로 여기서는 0과 1 사이로 매핑
-    action_6d[..., -1] = (action_6d[..., -1] + 1) / 2.0 
-    return action_6d
+    action_10d[..., -1] = (action_10d[..., -1] + 1) / 2.0 
+    return action_10d
+
+def obs_normalize_(tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
+    tcp_list[:3] = (tcp_list[:3] - trans_min) / (trans_max - trans_min) * 2 - 1
+    tcp_list[-1] = (tcp_list[-1] - grip_min ) / (grip_max - grip_min) *2 -1
+
+    return tcp_list
+
+
+
 
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
@@ -93,7 +103,7 @@ def main(input, output, match_episode, frequency):
     cfg = payload['cfg']
 
     # 정책 모델 초기화 및 가중치 로드
-    policy: RISEPolicy = hydra.utils.instantiate(cfg.policy)
+    policy: PCDPPolicy = hydra.utils.instantiate(cfg.policy)
     policy.load_state_dict(payload['state_dicts']['model'])
     
     device = torch.device(cfg.training.device)
@@ -126,7 +136,8 @@ def main(input, output, match_episode, frequency):
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")
             
             # YAML 설정에서 preprocessor_config를 가져와 PointCloudPreprocessor 인스턴스화
-            preprocessor = PointCloudPreprocessor(**cfg.task.dataset.preprocessor_config)
+            pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
+            low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
             
             target_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
             plan_time = mono_time.now_s() + 2.0
@@ -141,7 +152,6 @@ def main(input, output, match_episode, frequency):
             while True:
                 t_cycle_end = t_start + (iter_idx + 1) * dt
                 obs = env.get_obs()
-                
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
                 for key_stroke in press_events:
@@ -166,14 +176,29 @@ def main(input, output, match_episode, frequency):
                         # 1. 관측 데이터 전처리 (수정됨)
                         # 가장 마지막 관측 프레임 하나만 사용
                         pc_raw = obs['pointcloud'][-1]
-                        
-                        # 좌표 변환, 작업 공간 필터링 등 (config 기반)
-                        pc = preprocessor(pc_raw)
+                        pose_raw = obs['robot_eef_pose'][-1] # Shape (6,) euler
+                        grip_raw = obs['robot_gripper'][-1, :1] # Shape (1,)
 
-                        # 색상 정규화 (학습 때와 동일하게)
-                        colors = pc[:, 3:6] / 255.0  # [0, 255] -> [0, 1]
-                        colors = (colors - IMG_MEAN) / IMG_STD
-                        pc[:, 3:6] = colors
+                        # Step 1: Create the 7D observation vector [x,y,z,r,p,y,g]
+                        robot_obs_7d = np.concatenate([pose_raw, grip_raw.flatten()])
+
+                        # Step 2: Apply coordinate transform. TF_process expects a batch, so add a dimension.
+                        # It returns a batch, so get the first element [0] to revert to 1D.
+                        transformed_obs_7d = low_preprocessor.TF_process(robot_obs_7d[np.newaxis, :])[0]
+
+                        # Step 3: Convert the transformed pose to the 9D representation for the policy
+                        transformed_pose_6d = transformed_obs_7d[:6]
+                        transformed_grip = transformed_obs_7d[6:]
+                        pose_9d = xyz_rot_transform(transformed_pose_6d, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
+
+                        # Step 4: Combine into the final 10D vector for the policy
+                        robot_obs_10d = np.concatenate([pose_9d, transformed_grip])
+
+                        # Step 5: Normalize the final 1D vector
+                        robot_obs = obs_normalize_(robot_obs_10d, OBS_TRANS_MAX, OBS_TRANS_MIN, OBS_GRIP_MAX, OBS_GRIP_MIN)
+
+                        # 좌표 변환, 작업 공간 필터링 등 (config 기반)
+                        pc = pc_preprocessor(pc_raw)
 
                         # Voxelize
                         coords = np.ascontiguousarray(pc[:, :3] / voxel_size, dtype=np.int32)
@@ -184,8 +209,14 @@ def main(input, output, match_episode, frequency):
                         coords_batch = coords_batch.to(device)
                         feats_batch = feats_batch.to(device)
                         cloud_data = ME.SparseTensor(feats_batch, coords_batch)
+                        
+                        # Convert numpy obs to torch tensor
+                        robot_obs_tensor = torch.from_numpy(robot_obs).float().to(device).reshape(1, 1, -1)
+
                         t1= mono_time.now_ms()
-                        pred_action_10d_normalized = policy(cloud_data, batch_size=1).cpu()
+                        
+
+                        pred_action_10d_normalized = policy(cloud_data, obs=robot_obs_tensor, batch_size=1).cpu()
                         print(f"inference: {mono_time.now_ms() - t1}")
 
                         print(f"loop time: {mono_time.now_ms() - t2}")
@@ -197,8 +228,10 @@ def main(input, output, match_episode, frequency):
 
                         pos   = pred[:, :3].cpu().numpy()
                         rot6d = pred[:, 3:9].cpu().numpy()
-                        grip  = pred[:, 9:].cpu().numpy()
+                        grip = (pred[:, 9:].cpu().numpy() >= 0.8).astype(int)
 
+
+                        
                         xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)  # (N, 9)
 
                         # (xyz + rot6d) → (xyz + euler)
