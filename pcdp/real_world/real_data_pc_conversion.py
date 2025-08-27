@@ -6,6 +6,7 @@ import numpy as np
 import zarr
 import numcodecs
 from tqdm import tqdm
+import open3d as o3d
 import torch
 try:
     import pytorch3d.ops as torch3d_ops
@@ -28,15 +29,18 @@ class PointCloudPreprocessor:
     """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
     
     def __init__(self, 
-                extrinsics_matrix=None,
-                workspace_bounds=None,
-                rgb_mean=None,
-                rgb_std=None,
+                enable_sampling=False,
                 target_num_points=1024,
                 enable_transform=True,
+                extrinsics_matrix=None,
                 enable_cropping=True,
-                enable_sampling=True,
+                workspace_bounds=None,
                 enable_rgb_normalize=True,
+                rgb_mean=None,
+                rgb_std=None,
+                enable_filter=False,
+                nb_points=12,
+                radius=0.01,
                 use_cuda=True,
                 verbose=False):
         """
@@ -66,7 +70,7 @@ class PointCloudPreprocessor:
         # Default workspace bounds
         if workspace_bounds is None:
             self.workspace_bounds = [
-                [-0.000, 0.740],    # X range (m)
+                [-0.000, 0.715],    # X range (m)
                 [-0.400, 0.350],    # Y range (m)
                 [-0.100, 0.400]     # z range
             ]
@@ -84,10 +88,13 @@ class PointCloudPreprocessor:
             self.rgb_std=rgb_std
             
         self.target_num_points = target_num_points
+        self.nb_points = nb_points
+        self.radius = radius
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
         self.enable_rgb_normalize = enable_rgb_normalize
+        self.enable_filter = enable_filter
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
         
@@ -127,6 +134,8 @@ class PointCloudPreprocessor:
         # Workspace cropping
         if self.enable_cropping:
             points = self._crop_workspace(points)
+        if self.enable_filter:
+            points = self._apply_filter(points)
         # Point FPS sampling
         if self.enable_sampling:
             points = self._sample_points(points)
@@ -178,6 +187,14 @@ class PointCloudPreprocessor:
             print(f"After cropping: {len(cropped_points)}/{len(points)} points remain")
             
         return cropped_points
+
+    def _apply_filter(self, points):
+        if len(points) == 0:
+            raise ValueError("points empty")
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+        _, ind = pcd.remove_radius_outlier(nb_points=self.nb_points, radius=self.radius)
+        return points[ind]
         
     def _sample_points(self, points):
         """Apply farthest point sampling to reduce number of points."""
@@ -608,6 +625,11 @@ def _get_replay_buffer(
                 if episode_data is not None:
                     # Validate episode data against shape_meta
                     if validate_episode_data_with_shape_meta(episode_data, shape_meta):
+                        # Ensure all data are numpy arrays before adding to buffer
+                        for key in episode_data.keys():
+                            if isinstance(episode_data[key], list):
+                                episode_data[key] = np.asarray(episode_data[key])
+                        
                         # Add episode to replay buffer
                         replay_buffer.add_episode(episode_data,
                             object_codecs={'pointcloud': numcodecs.Pickle()})

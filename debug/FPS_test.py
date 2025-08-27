@@ -6,16 +6,6 @@ from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 import pcdp.common.mono_time as mono_time
 
 def main():
-    workspace = [[-10, 10], [-10, 10], [-10, 10]]
-    target_num_points = 1024 
-
-    preprocessor = PointCloudPreprocessor(
-        workspace_bounds=workspace,
-        target_num_points=target_num_points,
-        use_cuda=True,
-        verbose=False
-    )
-
     pipeline = ob.Pipeline()
     cfg = ob.Config()
     depth_profile = pipeline.get_stream_profile_list(ob.OBSensorType.DEPTH_SENSOR)\
@@ -31,12 +21,10 @@ def main():
     align = ob.AlignFilter(align_to_stream = ob.OBStreamType.DEPTH_STREAM)
     pc_filter = ob.PointCloudFilter()
     cam_param = pipeline.get_camera_param()
-    print(f"camera_praram: {cam_param}")
     pc_filter.set_camera_param(cam_param)
     pc_filter.set_create_point_format(ob.OBFormat.RGB_POINT)
-    voxel_size = 0.005
 
-    use_vis = False
+    use_vis = True
     if use_vis:
         # open3d visualization
         vis = o3d.visualization.Visualizer()
@@ -65,17 +53,14 @@ def main():
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
             pc=np.asarray(point_cloud) 
             pc = pc[pc[:, 2] > 0.0]
-            mean_z = pc[:,2].mean()
 
             if cnt>200:
                 start=mono_time.now_ms()
-                process_pc = preprocessor.process(pc)
                 tim= mono_time.now_ms() - start
                 if tim>50.0:
                     t_cnt+=1
                 durations = np.append(durations, tim)
-            # print(f"preprocess_pc shape: {process_pc.shape}")
-            # vis
+
             if use_vis:
                 vis_pc = np.asarray(point_cloud, dtype =np.float32)
                 pcd.points = o3d.utility.Vector3dVector(vis_pc[:, :3])

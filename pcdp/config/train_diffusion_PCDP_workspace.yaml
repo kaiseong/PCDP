@@ -39,8 +39,8 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 200
-  num_workers: 15
+  batch_size: 240
+  num_workers: 16
   shuffle: True
   pin_memory: True
   persistent_workers: False
@@ -76,11 +76,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "moai_${now:%Y.%m.%d}- (adding pad after: 15)"
+  name: "moai_${now:%Y.%m.%d}-(adding pad after: 15)"
   project: pcdp
   resume: true
   tags:
-  - pcdp
+  - stack3
 
 checkpoint:
   save_ckpt: True

@@ -18,7 +18,7 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_RISE_policy import RISEPolicy
+from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
@@ -135,7 +135,7 @@ def main(input, output, match_episode, frequency):
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")
             
             # YAML 설정에서 preprocessor_config를 가져와 PointCloudPreprocessor 인스턴스화
-            pc_pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
+            pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
             low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
             
             target_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
@@ -175,10 +175,18 @@ def main(input, output, match_episode, frequency):
                         # 1. 관측 데이터 전처리 (수정됨)
                         # 가장 마지막 관측 프레임 하나만 사용
                         pc_raw = obs['pointcloud'][-1]
-                        pose_raw = obs['robot_eef_pose'][-1]
-                        grip_raw = obs['robot_gripper'][-1,:1]
+                        # Explicitly cast to float64 to prevent potential dtype issues
+                        pose_raw = obs['robot_eef_pose'][-1].astype(np.float64)
+                        grip_raw = obs['robot_gripper'][-1,:1].astype(np.float64)
                         robot_obs_raw = np.concatenate([pose_raw, grip_raw], axis=-1)
-                        robot_obs_euler_tf = low_preprocessor.TF_process(robot_obs_raw)
+
+                        # TF_process expects a batch of poses (N, 7). Reshape (7,) to (1, 7).
+                        robot_obs_raw_batched = np.expand_dims(robot_obs_raw, axis=0)
+                        robot_obs_euler_tf_batched = low_preprocessor.TF_process(robot_obs_raw_batched)
+                        
+                        # The result is also batched, so squeeze it back to a single pose.
+                        robot_obs_euler_tf = robot_obs_euler_tf_batched.squeeze(0)
+
                         obs_pose_euler = robot_obs_euler_tf[:6]
                         obs_gripper = robot_obs_euler_tf[6:]
                         obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='XYZ').squeeze()
@@ -201,9 +209,6 @@ def main(input, output, match_episode, frequency):
                         feats_batch = feats_batch.to(device)
                         cloud_data = ME.SparseTensor(feats_batch, coords_batch)
                         
-                        # Convert numpy obs to torch tensor
-                        robot_obs_tensor = torch.from_numpy(robot_obs).float().to(device).reshape(1, 1, -1)
-
                         t1= mono_time.now_ms()
                         
 
