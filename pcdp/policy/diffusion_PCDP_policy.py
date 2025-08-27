@@ -35,9 +35,10 @@ class PCDPPolicy(BasePointCloudPolicy):
     def forward(self, cloud, actions=None, obs=None, batch_size = 24):
         src, pos, src_padding_mask = self.sparse_encoder(cloud, batch_size = batch_size)
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1]
-        combine_readout=torch.cat([readout, obs], dim =-1)
+
+        combine_readout=torch.cat([readout, obs], dim =-1)  
+
         readout = combine_readout[:, 0]
-        
         if actions is not None:
             loss = self.action_decoder.compute_loss(readout, actions)
             return loss

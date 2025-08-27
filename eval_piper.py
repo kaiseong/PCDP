@@ -18,7 +18,7 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
+from pcdp.policy.diffusion_RISE_policy import RISEPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
@@ -64,22 +64,22 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
     return original_poses
 
 
-def _unnormalize_action(action_7d):
+def _unnormalize_action(action_10d):
     """
     주어진 6D 회전 표현 액션을 역정규화합니다.
     action_6d: (N, 10) 크기의 배열 - [x, y, z, rot_6d(6), gripper(1)]
     """
     # TRANS_MIN/MAX는 (3,) 크기이므로 앞 3개 요소에만 적용
-    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_7d.device).float()
-    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_7d.device).float()
+    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_10d.device).float()
+    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_10d.device).float()
     
     # 위치 역정규화: [-1, 1] -> [min, max]
-    action_7d[..., :3] = (action_7d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
+    action_10d[..., :3] = (action_10d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
     
     # 그리퍼 역정규화: [-1, 1] -> [0, 1] (0: closed, 1: open)
     # RISE의 그리퍼 값은 너비가 아닌 상태를 나타내므로 여기서는 0과 1 사이로 매핑
-    action_7d[..., -1] = (action_7d[..., -1] + 1) / 2.0 
-    return action_7d
+    action_10d[..., -1] = (action_10d[..., -1] + 1) / 2.0 
+    return action_10d
 
 def obs_normalize_(tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
     tcp_list[:3] = (tcp_list[:3] - trans_min) / (trans_max - trans_min) * 2 - 1
@@ -135,7 +135,7 @@ def main(input, output, match_episode, frequency):
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")
             
             # YAML 설정에서 preprocessor_config를 가져와 PointCloudPreprocessor 인스턴스화
-            pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
+            pc_pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
             low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
             
             target_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
@@ -151,7 +151,6 @@ def main(input, output, match_episode, frequency):
             while True:
                 t_cycle_end = t_start + (iter_idx + 1) * dt
                 obs = env.get_obs()
-                
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
                 for key_stroke in press_events:
@@ -201,6 +200,10 @@ def main(input, output, match_episode, frequency):
                         coords_batch = coords_batch.to(device)
                         feats_batch = feats_batch.to(device)
                         cloud_data = ME.SparseTensor(feats_batch, coords_batch)
+                        
+                        # Convert numpy obs to torch tensor
+                        robot_obs_tensor = torch.from_numpy(robot_obs).float().to(device).reshape(1, 1, -1)
+
                         t1= mono_time.now_ms()
                         
 
