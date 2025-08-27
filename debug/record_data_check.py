@@ -33,16 +33,16 @@ robot_to_base = np.array([
 
 
 camera_to_base = np.array([
-                [ 0.0,        -0.9063,      0.4226,    0.110],
-                [ -1.0,        0.,          0.,          0.],
-                [0.0,          -0.4226,      -0.9063,     0.510       ],
-                [ 0.,          0.,          0.,          1.         ]
+      [  0.007131,  -0.91491,    0.403594,  0.05116],
+      [ -0.994138,   0.003833,   0.02656,  -0.00918],
+      [ -0.025717,  -0.403641,  -0.914552, 0.50821],
+      [ 0.,         0. ,        0. ,        1.    ]
             ])
 
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (milli meters)
-    [-0.400, 0.400],    # Y range (milli meters)
-    [-0.100, 0.350]     # Z range (milli meters)
+    [0.000, 0.740],    # X range (milli meters)
+    [-0.400, 0.350],    # Y range (milli meters)
+    [-0.100, 0.400]     # Z range (milli meters)
 ])
 
 
@@ -122,7 +122,8 @@ def point_cloud_visualize(obs_episode):
 
     preprocess = PointCloudPreprocessor(camera_to_base,
                                         workspace_bounds,
-                                        enable_sampling=False)
+                                        enable_sampling=False,
+                                        enable_rgb_normalize=False)
     pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
@@ -133,7 +134,7 @@ def point_cloud_visualize(obs_episode):
     
     opt = vis.get_render_option()
     opt.point_size = 1.0
-    opt.background_color = np.array([0, 0, 0])
+    opt.background_color = np.array([0.5, 0.6, 0.5])
     
     pcd = o3d.geometry.PointCloud()
     is_first_frame = True
@@ -235,23 +236,23 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
         
         print(f"cnt: {cnt}")
         
-        with open(f"{episode_name}_obs_dataset.csv", 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'capture_time'])
-            for i in range(len(obs_align_timestamp)):
-                writer.writerow([i, obs_align_timestamp[i], obs_robot_timestamp[i], obs_capture_timestamp[i]])
-        with open(f"{episode_name}_action.csv", 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw'])
-            for i in range(len(action)):
-                writer.writerow([i, action[i][0], action[i][1], action[i][2], action[i][3], action[i][4], action[i][5]])
-        action_csv=f'{episode_name}_action_timestamp_dataset.csv'
-        save_timestamp_duration_to_csv(action_timestamps, action_csv)
+        # with open(f"{episode_name}_obs_dataset.csv", 'w', newline='') as csvfile:
+        #     writer = csv.writer(csvfile)
+        #     writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'capture_time'])
+        #     for i in range(len(obs_align_timestamp)):
+        #         writer.writerow([i, obs_align_timestamp[i], obs_robot_timestamp[i], obs_capture_timestamp[i]])
+        # with open(f"{episode_name}_action.csv", 'w', newline='') as csvfile:
+        #     writer = csv.writer(csvfile)
+        #     writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw'])
+        #     for i in range(len(action)):
+        #         writer.writerow([i, action[i][0], action[i][1], action[i][2], action[i][3], action[i][4], action[i][5]])
+        # action_csv=f'{episode_name}_action_timestamp_dataset.csv'
+        # save_timestamp_duration_to_csv(action_timestamps, action_csv)
         point_cloud_visualize(obs_episode)
             
 
 # 사용 예시
-analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/test/recorder_data")
+analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/test1_output/recorder_data")
 # summary = analyzer.get_episode_summary()
 # print(f"총 에피소드 수: {summary['total_episodes']}")
 # for detail in summary['episode_details']:
@@ -259,5 +260,5 @@ analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/test/recorder_data"
 #           f"{detail.get('action_steps', 'N/A')} action steps - {detail['status']}")
 
 # 사용 예시
-obs_buffer, action_buffer = analyzer.load_episode('episode_0000')
-analyze_episode_quality(obs_buffer, action_buffer, 'episode_0000')
+obs_buffer, action_buffer = analyzer.load_episode('episode_0003')
+analyze_episode_quality(obs_buffer, action_buffer, 'episode_0003')
