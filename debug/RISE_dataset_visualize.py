@@ -31,7 +31,7 @@ camera_to_base = np.array([
 ])
 
 workspace_bounds = np.array([
-    [-0.000, 0.740],    # X range (m)
+    [-0.000, 0.715],    # X range (m)
     [-0.400, 0.350],    # Y range (m)
     [-0.100, 0.400]     # Z range (m)
 ])
@@ -74,8 +74,8 @@ NUM_WORKERS = 10
 
 def main():
     # 필요시 전처리기 사용 (지금은 미사용)
-    preprocess = PointCloudPreprocessor(camera_to_base,
-                                        workspace_bounds,
+    preprocess = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
+                                        workspace_bounds=workspace_bounds,
                                         enable_sampling=False)
 
     # 1) YAML 로드 & Dataset 인스턴스

@@ -30,35 +30,57 @@ sys.path.insert(0, project_root)
 
 from pcdp.dataset.RISE_stack_pc_dataset import collate_fn
 from pcdp.policy.diffusion_RISE_policy import RISEPolicy
+from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common import RISE_transformation as rise_tf
+from pcdp.common.RISE_transformation import xyz_rot_transform
+from pcdp.dataset.RISE_util import *
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 
-# --- Constants ---
-# Normalization constants from the dataset, converted to tensors
-TRANS_MIN = torch.from_numpy(np.array([0.109933, -0.265188, 0.07253])).float()
-TRANS_MAX = torch.from_numpy(np.array([0.387143, -0.018333, 0.265922])).float()
+robot_to_base = np.array([
+    [1.,         0.,         0.,          -0.04],
+    [0.,         1.,         0.,         -0.29],
+    [0.,         0.,         1.,          -0.03],
+    [0.,         0.,         0.,          1.0]
+])
+
+
 
 # Visualization constants
 EEF_FRAME_SIZE = 0.03
 POINT_SIZE = 2.0
 HORIZON = 16
 
-# --- Normalization Functions ---
-def unnormalize_action(normalized_action):
-    """
-    Un-normalizes an action from [-1, 1] range to the original scale.
-    """
-    unnormalized_action = normalized_action.clone()
-    
-    # Un-normalize translation (first 3 dimensions)
-    unnormalized_action[..., :3] = (normalized_action[..., :3] + 1) / 2 * (TRANS_MAX - TRANS_MIN) + TRANS_MIN
-    
-    # Un-normalize gripper (last dimension)
-    unnormalized_action[..., -1] = (normalized_action[..., -1] + 1) / 2
-    
-    return unnormalized_action
 
-@hydra.main(version_base=None, config_path="../pcdp/config", config_name="train_diffusion_RISE_workspace")
+
+# --- Normalization Functions ---
+def _unnormalize_action(action_10d):
+    """
+    주어진 6D 회전 표현 액션을 역정규화합니다.
+    action_6d: (N, 10) 크기의 배열 - [x, y, z, rot_6d(6), gripper(1)]
+    """
+    # TRANS_MIN/MAX는 (3,) 크기이므로 앞 3개 요소에만 적용
+    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_10d.device).float()
+    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_10d.device).float()
+    
+    # 위치 역정규화: [-1, 1] -> [min, max]
+    action_10d[..., :3] = (action_10d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
+    
+    # 그리퍼 역정규화: [-1, 1] -> [0, 1] (0: closed, 1: open)
+    # RISE의 그리퍼 값은 너비가 아닌 상태를 나타내므로 여기서는 0과 1 사이로 매핑
+    action_10d[..., -1] = (action_10d[..., -1] + 1) / 2.0 
+    return action_10d
+
+def obs_normalize_(tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
+    tcp_list[:3] = (tcp_list[:3] - trans_min) / (trans_max - trans_min) * 2 - 1
+    tcp_list[-1] = (tcp_list[-1] - grip_min ) / (grip_max - grip_min) *2 -1
+
+    return tcp_list
+
+@hydra.main(version_base=None, config_path="../pcdp/config", config_name="train_diffusion_PCDP_workspace")
 def main(cfg: OmegaConf):
+    # Register the 'eval' resolver
+    OmegaConf.register_new_resolver("eval", eval)
+    
     # --- Visualization Control ---
     vis_gt = False
     vis_pred = True
@@ -80,13 +102,10 @@ def main(cfg: OmegaConf):
     # --- 2. Setup: Device, Model, Dataset ---
     device = torch.device(cfg.training.device)
 
-    # Move normalization constants to device
-    global TRANS_MIN, TRANS_MAX
-    TRANS_MIN = TRANS_MIN.to(device)
-    TRANS_MAX = TRANS_MAX.to(device)
 
     # Load model from config
-    model: RISEPolicy = hydra.utils.instantiate(cfg.policy).to(device)
+    model: PCDPPolicy = hydra.utils.instantiate(cfg.policy).to(device)
+    low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
     
     # Load checkpoint
     print(f"Loading checkpoint from: {checkpoint_path}")
@@ -142,7 +161,7 @@ def main(cfg: OmegaConf):
     vis.create_window("Model Test: Prediction vs Ground Truth", 1280, 720)
     opt = vis.get_render_option()
     opt.point_size = POINT_SIZE
-    opt.background_color = np.asarray([0.1, 0.1, 0.1])
+    opt.background_color = np.asarray([0.3, 0.4, 0.3])
 
     pcd = o3d.geometry.PointCloud()
     base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
@@ -168,8 +187,10 @@ def main(cfg: OmegaConf):
             # Observation
             coords = batch['input_coords_list']
             feats = batch['input_feats_list']
+            robot_obs = batch['robot_obs'][sample_idx].to(device)
             point_indices = (coords[:, 0] == sample_idx)
             
+
             obs_pcd_np = feats[point_indices].numpy()
             obs_coords = coords[point_indices]
             
@@ -184,11 +205,11 @@ def main(cfg: OmegaConf):
                 obs_tensor = ME.SparseTensor(features=obs_feats_batch, coordinates=obs_coords_batch, device=device)
                 
                 # Predict action by calling the forward method without the 'actions' parameter
-                pred_action_normalized = model.forward(obs_tensor, batch_size=1) # T, 10 (6d_rot + gripper)
+                pred_action_normalized = model.forward(obs_tensor, obs=robot_obs, batch_size=1) # T, 10 (6d_rot + gripper)
                 
                 # --- 6. Post-processing and Comparison ---
                 # Un-normalize predicted action
-                pred_action_10d = unnormalize_action(pred_action_normalized)
+                pred_action_10d = _unnormalize_action(pred_action_normalized)
                 
                 # Convert predicted 6D rot to euler for comparison
                 pred_action_euler = rise_tf.xyz_rot_transform(
@@ -250,6 +271,7 @@ def main(cfg: OmegaConf):
                     center_k = pred_pose_matrix[:3, 3]  # (x,y,z)
                     pred_frame.translate(center_k)
                     geometries['pred_frames'].append(pred_frame)
+                    
 
             # Add geometries to visualizer
             if first_load:

@@ -59,8 +59,6 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
             rotation_rep_convention='XYZ'
         )
         original_poses.append(original_pose_6d)
-
-
     return original_poses
 
 

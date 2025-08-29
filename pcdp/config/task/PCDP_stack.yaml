@@ -45,7 +45,7 @@ dataset:
     enable_sampling: False
     target_num_points: 1024
     enable_rgb_normalize: True
-    enable_filter: True
+    enable_filter: False
     nb_points: 12
     radius: 0.01
     use_cuda: True
@@ -65,8 +65,8 @@ dataset:
       - [-0.100, 0.400]    # Z range (meters)
     
     # normalize rgb values
-    rgb_mean: [0.0542, 0.0542, 0.0542]
-    rgb_std: [0.1984, 0.2058, 0.2005]
+    rgb_mean: [0.0531, 0.0531, 0.0531]
+    rgb_std: [0.2037, 0.2145, 0.2066]
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:
     robot_to_base:

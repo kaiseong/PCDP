@@ -39,8 +39,8 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 240
-  num_workers: 16
+  batch_size: 200
+  num_workers: 24
   shuffle: True
   pin_memory: True
   persistent_workers: False
@@ -76,7 +76,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "moai_${now:%Y.%m.%d}-(adding pad after: 15)"
+  name: "nscl_${now:%Y.%m.%d}-(adding pad after: 15, Filter Off)"
   project: pcdp
   resume: true
   tags:
@@ -89,7 +89,7 @@ checkpoint:
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
-  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%D-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:

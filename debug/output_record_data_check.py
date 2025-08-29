@@ -33,26 +33,18 @@ robot_to_base = np.array([
 
 
 camera_to_base = np.array([
-                [ 0.0,        -0.9063,      0.4226,    0.110],
-                [ -1.0,        0.,          0.,          0.],
-                [0.0,          -0.4226,      -0.9063,     0.510       ],
-                [ 0.,          0.,          0.,          1.         ]
+      [  0.007131,  -0.91491,    0.403594,  0.05116],
+      [ -0.994138,   0.003833,   0.02656,  -0.00918],
+      [ -0.025717,  -0.403641,  -0.914552, 0.50821],
+      [ 0.,         0. ,        0. ,        1.    ]
             ])
 
 workspace_bounds = np.array([
-    [0.100, 0.800],    # X range (milli meters)
-    [-0.400, 0.400],    # Y range (milli meters)
-    [-0.100, 0.350]     # Z range (milli meters)
+    [0.000, 0.715],    # X range (milli meters)
+    [-0.400, 0.350],    # Y range (milli meters)
+    [-0.100, 0.400]     # Z range (milli meters)
 ])
 
-
-def save_timestamp_duration_to_csv(timestamps, filename):
-    """타임스탬프 배열을 CSV 파일로 저장"""
-    with open(filename, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['index', 'timestamp'])
-        for i, ts in enumerate(timestamps):
-            writer.writerow([i, ts])
 
 
 class EpisodeAnalyzer:
@@ -92,10 +84,11 @@ def point_cloud_visualize(obs_episode):
     에피소드의 포인트 클라우드 시퀀스를 동영상처럼 재생하여 시각화합니다.
     """
 
-    preprocess = PointCloudPreprocessor(camera_to_base,
-                                        workspace_bounds,
+    preprocess = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
+                                        workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
-                                        enable_rgb_normalize=False)
+                                        enable_rgb_normalize=False,
+                                        enable_filter=True)
     pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
@@ -106,7 +99,7 @@ def point_cloud_visualize(obs_episode):
     
     opt = vis.get_render_option()
     opt.point_size = 1.0
-    opt.background_color = np.array([0, 0, 0])
+    opt.background_color = np.array([0.5, 0.55, 0.5])
     
     pcd = o3d.geometry.PointCloud()
     is_first_frame = True
@@ -171,17 +164,6 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Analyze and visualize inference output episode data.')
-    parser.add_argument('output_dir', type=str, help='Directory containing the inference output data (e.g., /path/to/test1_output/recorder_data).')
-    parser.add_argument('episode', type=str, help='Name of the episode to analyze (e.g., episode_0000).')
-    args = parser.parse_args()
-
-    analyzer = EpisodeAnalyzer(args.output_dir)
-    
-    print(f"Found episodes: {analyzer.episodes}")
-    if args.episode not in analyzer.episodes:
-        print(f"Error: Episode '{args.episode}' not found in '{args.output_dir}'.")
-        sys.exit(1)
-
-    obs_buffer, action_buffer = analyzer.load_episode(args.episode)
-    analyze_episode_quality(obs_buffer, action_buffer, args.episode)
+    analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/simple_stack_3_output_final/recorder_data")
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0004')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0004')

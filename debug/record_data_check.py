@@ -40,7 +40,7 @@ camera_to_base = np.array([
             ])
 
 workspace_bounds = np.array([
-    [0.000, 0.740],    # X range (milli meters)
+    [0.000, 0.715],    # X range (milli meters)
     [-0.400, 0.350],    # Y range (milli meters)
     [-0.100, 0.400]     # Z range (milli meters)
 ])
