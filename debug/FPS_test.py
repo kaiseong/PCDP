@@ -14,7 +14,8 @@ def main():
                     .get_video_stream_profile(1280, 720, ob.OBFormat.RGB, 30)
     cfg.enable_stream(depth_profile)
     cfg.enable_stream(color_profile)
-
+    cfg.set_frame_aggregate_output_mode(ob.OBFrameAggregateOutputMode.FULL_FRAME_REQUIRE)
+    
     pipeline.enable_frame_sync()
     pipeline.start(cfg)
 
@@ -39,8 +40,9 @@ def main():
     durations = np.array([])
     cnt = 0
     t_cnt=0
+    start=0
     try:
-        while cnt<500:
+        while cnt<1500:
             frames = pipeline.wait_for_frames(1)
             if frames is None:
                 continue
@@ -55,11 +57,11 @@ def main():
             pc = pc[pc[:, 2] > 0.0]
 
             if cnt>200:
-                start=mono_time.now_ms()
                 tim= mono_time.now_ms() - start
                 if tim>50.0:
                     t_cnt+=1
                 durations = np.append(durations, tim)
+            start=mono_time.now_ms()
 
             if use_vis:
                 vis_pc = np.asarray(point_cloud, dtype =np.float32)

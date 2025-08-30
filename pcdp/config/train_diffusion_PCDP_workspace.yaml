@@ -39,11 +39,11 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 200
-  num_workers: 24
+  batch_size: 210
+  num_workers: 15
   shuffle: True
   pin_memory: True
-  persistent_workers: False
+  persistent_workers: True
 
 
 val_dataloader:
@@ -65,10 +65,10 @@ training:
   seed: 233
   debug: False
   resume: True
-  num_epochs: 1000
+  num_epochs: 1500
   use_ema: False
   rollout_every: 5
-  save_epochs: 10
+  save_epochs: 20
   tqdm_interval_sec: 1.0
   validation_every: 5
 
@@ -76,7 +76,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "nscl_${now:%Y.%m.%d}-(adding pad after: 15, Filter Off)"
+  name: "moai_${now:%Y.%m.%d}-( nb_point: 15, STD: 1.7, Filter On)"
   project: pcdp
   resume: true
   tags:

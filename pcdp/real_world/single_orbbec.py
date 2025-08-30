@@ -214,6 +214,7 @@ class SingleOrbbec(mp.Process):
                         .get_video_stream_profile(*color_res,ob.OBFormat.RGB,fps)
         cfg.enable_stream(depth_profile)
         cfg.enable_stream(color_profile)
+        cfg.set_frame_aggregate_output_mode(ob.OBFrameAggregateOutputMode.FULL_FRAME_REQUIRE)
         pipeline.enable_frame_sync()
         pipeline.start(cfg)
         align = ob.AlignFilter(align_to_stream=align_to)

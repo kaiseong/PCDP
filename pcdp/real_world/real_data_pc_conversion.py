@@ -39,8 +39,8 @@ class PointCloudPreprocessor:
                 rgb_mean=None,
                 rgb_std=None,
                 enable_filter=False,
-                nb_points=12,
-                radius=0.01,
+                nb_points=15,
+                sor_std=1.7,
                 use_cuda=True,
                 verbose=False):
         """
@@ -89,7 +89,7 @@ class PointCloudPreprocessor:
             
         self.target_num_points = target_num_points
         self.nb_points = nb_points
-        self.radius = radius
+        self.sor_std = sor_std
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
@@ -193,7 +193,7 @@ class PointCloudPreprocessor:
             raise ValueError("points empty")
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-        _, ind = pcd.remove_radius_outlier(nb_points=self.nb_points, radius=self.radius)
+        _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
         return points[ind]
         
     def _sample_points(self, points):
