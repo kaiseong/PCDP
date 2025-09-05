@@ -1,20 +1,15 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import sys
 import os
+import time
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-
 import pyrealsense2 as rs
 import numpy as np
 import open3d as o3d
-import time
 import pcdp.common.mono_time as mono_time
-
 
 def rs_points_to_array(points: rs.points,
                        color_frame: rs.video_frame,
@@ -66,15 +61,29 @@ def rs_points_to_array(points: rs.points,
     return np.concatenate([xyz.astype(np.float32), rgb.astype(np.float32)], axis=1)
 
 def main():
-    pipe = rs.pipeline()
-    cfg = rs.config()
-    # D405 추천 저해상도(속도) 예: 424x240@30
-    cfg.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 60)
-    cfg.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8,60)
-    profile = pipe.start(cfg)
+    # 사용할 포인트 개수 고정
+    NUM_POINTS = 8192*2
 
+    # 파이프라인 생성 및 설정
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 60)
+    config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 60)
 
-    # 옵션(정확도 프리셋)
+    serials = list()
+    for d in rs.context().devices:
+        if d.get_info(rs.camera_info.name).lower() != 'platform camera':
+            serial = d.get_info(rs.camera_info.serial_number)
+            product_line = d.get_info(rs.camera_info.product_line)
+            if product_line == 'D400':
+                # only works with D400 series
+                serials.append(serial)
+    serials = sorted(serials)
+    print(serials)
+
+    # 스트림 시작
+    profile = pipeline.start(config)
+    
     try:
         depth_sensor = profile.get_device().first_depth_sensor()
         if depth_sensor.supports(rs.option.visual_preset):
@@ -83,79 +92,105 @@ def main():
         print("not support")
         pass
 
-    pc = rs.pointcloud()
+    # 워밍업 프레임
+    for i in range(30):
+        pipeline.wait_for_frames()
 
-    # 워밍업
-    for _ in range(15):
-        pipe.wait_for_frames()
-
-    use_vis = False  # 필요시 True
+    use_vis = False  # 시각화 활성화
     if use_vis:
         vis = o3d.visualization.Visualizer()
         vis.create_window("D405 Colored PointCloud", 1280, 720)
         opt = vis.get_render_option(); opt.point_size = 1.0
-        opt.background_color = np.array([0.4, 0.44, 0.4])
         pcd = o3d.geometry.PointCloud(); added = False
 
     make_pc_ms = np.array([])
+    downsample_ms = np.array([]) # 다운샘플링 시간 측정용
     loop_ms = np.array([])
     t_prev = mono_time.now_ms()
     
-
+    pc = rs.pointcloud()
 
     try:
-        for _ in range(500):
-            frames = pipe.wait_for_frames()
-
-            depth = frames.get_depth_frame()
-            color = frames.get_color_frame()
-            if not depth or not color:
+        while True:
+            frames = pipeline.wait_for_frames(100)
+            depth_frame = frames.get_depth_frame()
+            color_frame = frames.get_color_frame()
+            if not depth_frame or not color_frame:
                 continue
-            print(f"depth: {depth.get_timestamp()}, color: {color.get_timestamp()}")
-            t0 = mono_time.now_ms()
-            # UV 계산 + 포인트클라우드
-            pc.map_to(color)
-            points = pc.calculate(depth)
 
-            arr = rs_points_to_array(points, color,
-                                     min_z=0.07, max_z=0.50, bilinear=True)
-            breakpoint()
+            # 포인트클라우드 객체 생성 및 색상 맵핑
+            pc.map_to(color_frame)
+            points = pc.calculate(depth_frame)
+
+            t0 = mono_time.now_ms()
+            # rs_points_to_array 함수를 사용하여 포인트 클라우드 생성
+            pc_array = rs_points_to_array(points, color_frame,
+                                     min_z=0.07, max_z=0.40, bilinear=True)
             make_pc_ms = np.append(make_pc_ms, mono_time.now_ms()-t0)
 
-            if arr.shape[0] == 0:
-                loop_ms.append((time.perf_counter() - t_prev) * 1000.0)
-                t_prev = time.perf_counter()
+            if pc_array.shape[0] == 0:
                 continue
 
+            # ===== 다운샘플링/패딩 로직 시작 =====
+            t_downsample_start = mono_time.now_ms()
+            
+
+            num_valid_points = pc_array.shape[0]
+
+            if num_valid_points > NUM_POINTS:
+                # 다운샘플링
+                indices = np.random.choice(num_valid_points, NUM_POINTS, replace=False)
+                final_pc = pc_array[indices]
+            elif num_valid_points < NUM_POINTS:
+                # 패딩
+                padding = np.zeros((NUM_POINTS - num_valid_points, 6), dtype=np.float32)
+                final_pc = np.vstack([pc_array, padding])
+            else:
+                # 크기가 정확히 맞을 경우
+                final_pc = pc_array
+
+            downsample_ms = np.append(downsample_ms, mono_time.now_ms() - t_downsample_start)
+            # ===== 다운샘플링/패딩 로직 끝 =====
+
             if use_vis:
-                pcd.points = o3d.utility.Vector3dVector(arr[:, :3].astype(np.float64))
-                pcd.colors = o3d.utility.Vector3dVector(arr[:, 3:].astype(np.float64))
+                pcd.points = o3d.utility.Vector3dVector(final_pc[:, :3])
+                pcd.colors = o3d.utility.Vector3dVector(final_pc[:, 3:])
+
                 if not added:
                     vis.add_geometry(pcd, reset_bounding_box=True); added = True
                 else:
                     vis.update_geometry(pcd)
-                vis.poll_events(); vis.update_renderer()
+                
+                vis.poll_events()
+                vis.update_renderer()
 
             loop_ms = np.append(loop_ms, mono_time.now_ms()-t_prev)
             t_prev = mono_time.now_ms()
 
     except KeyboardInterrupt:
-        pass
+        print("Interrupted by user")
     finally:
-        pipe.stop()
+        pipeline.stop()
         if use_vis:
             vis.destroy_window()
+        
         if make_pc_ms.size > 0:
-            make_pc_ms=make_pc_ms[1:]
-            print(f"""make_pc_ms: mean: {make_pc_ms.mean()}
-                      max: {make_pc_ms.max()}
-                      min: {make_pc_ms.min()}""")
-            print(f"max_index: {np.argmax(make_pc_ms)}, min_index: {np.argmin(make_pc_ms)}")
+            print(f"""
+--- Point Cloud Generation ---
+Mean: {make_pc_ms.mean():.2f} ms
+Max:  {make_pc_ms.max():.2f} ms
+Min:  {make_pc_ms.min():.2f} ms""")
+        if downsample_ms.size > 0:
+            print(f"""--- Downsampling/Padding ---
+Mean: {downsample_ms.mean():.2f} ms
+Max:  {downsample_ms.max():.2f} ms
+Min:  {downsample_ms.min():.2f} ms""")
         if loop_ms.size > 0:
-            loop_ms=loop_ms[1:]
-            print(f"""loop_ms: mean: {loop_ms.mean()}
-                      max: {loop_ms.max()}
-                      min: {loop_ms.min()}""")
-            print(f"max_index: {np.argmax(loop_ms)}, min_index: {np.argmin(loop_ms)}")
+            print(f"""--- Total Loop ---
+Mean: {loop_ms.mean():.2f} ms
+Max:  {loop_ms.max():.2f} ms
+Min:  {loop_ms.min():.2f} ms""")
+
+
 if __name__ == "__main__":
     main()

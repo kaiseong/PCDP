@@ -7,33 +7,9 @@ import pcdp.common.mono_time as mono_time
 from piper_sdk import *
 import time
 import pinocchio as pin
-from pinocchio.robot_wrapper import RobotWrapper
-from pinocchio.robot_wrapper import RobotWrapper
+from pcdp.common import RISE_transformation as rise_tf
 
 
-def piper_eef_to_SE3_base(eef_mm_deg):
-    """eef: [x(mm), y(mm), z(mm), roll(deg), pitch(deg), yaw(deg)] → SE3(베이스 기준)"""
-    x_mm, y_mm, z_mm, r_deg, p_deg, y_deg = eef_mm_deg[:6]
-    t = np.array([x_mm, y_mm, z_mm], dtype=np.float64) / 1000.0
-    
-    # Create rotation matrix from euler angles (XYZ convention)
-    cx, sx = np.cos(np.deg2rad(r_deg)), np.sin(np.deg2rad(r_deg))
-    cy, sy = np.cos(np.deg2rad(p_deg)), np.sin(np.deg2rad(p_deg))
-    cz, sz = np.cos(np.deg2rad(y_deg)), np.sin(np.deg2rad(y_deg))
-    Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]], dtype=np.float64)
-    Ry = np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]], dtype=np.float64)
-    Rz = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]], dtype=np.float64)
-    R = Rz @ Ry @ Rx
-
-    return pin.SE3(R, t)
-
-def pose_errors(M_meas: pin.SE3, M_fk: pin.SE3):
-    """오차: 위치(m), 자세(rad)"""
-    dM = M_meas.inverse() * M_fk
-    trans_err = np.linalg.norm(dM.translation) # 위치 오차
-    rot_vec   = pin.log3(dM.rotation)          # 3D 회전벡터
-    rot_err   = np.linalg.norm(rot_vec)
-    return trans_err, rot_err
 
 URDF_PATH = "/home/moai/pcdp/dependencies/piper_description/urdf/piper_no_gripper_description.urdf"
 MESH_DIRS = ["/home/moai/pcdp/dependencies"]
@@ -136,25 +112,19 @@ def main():
     try:
         while True:
             # Get both pose sources
-            joints_deg = np.asarray(piper.GetArmJointMsgs(), dtype=np.float64)
-            eef_pose_msg = piper.GetArmEndPoseMsgs()
+            end_pose = np.array(piper.GetArmEndPoseMsgs(), dtype=np.float32)
+            end_pose[:3] = end_pose[:3] * 0.001
+            translation = end_pose[:3]
+            rotation = end_pose[3:6]
+            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
+            T_k_matrix = self.robot_to_base @ eef_to_robot_base_k
+            pose_6d = rise_tf.mat_to_xyz_rot(
+                T_k_matrix,
+                rotation_rep='euler_angles',
+                rotation_rep_convention='ZYX'
+            )
 
-            # --- 1. Calculate pose from FK ---
-            q = np.deg2rad(joints_deg)
-            pin.forwardKinematics(model, data, q)
-            pin.updateFramePlacements(model, data)
-            # This is the pose of the end-effector in the robot's base frame
-            eef_pose_fk = data.oMf[fid]
-
-            # --- 2. Get pose from GetArmEndPoseMsgs ---
-            eef_pose_measured = piper_eef_to_SE3_base(eef_pose_msg)
-
-            # --- 3. Calculate and print the difference ---
-            trans_err_m, rot_err_rad = pose_errors(eef_pose_measured, eef_pose_fk)
-            print(f"Pose Difference | Translation: {trans_err_m*1000:.3f} mm, Rotation: {np.rad2deg(rot_err_rad):.3f} deg")
-
-            # --- Use the more reliable FK result for visualization ---
-            eef_to_robot_base_k = eef_pose_fk.homogeneous
+            
 
             # Transform to the world frame for visualization
             T_k_matrix = robot_to_base @ eef_to_robot_base_k

@@ -22,8 +22,7 @@ from pcdp.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
 from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 
-# Assuming these util/transformation files are created by the user
-from pcdp.dataset.RISE_util import *
+from tqdm import tqdm
 from pcdp.common.RISE_transformation import xyz_rot_transform
 
 class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
@@ -58,7 +57,6 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         if enable_low_dim_preprocessing:
             low_dim_preprocessor = LowDimPreprocessor(**(low_dim_preprocessor_config or {}))
         
-
         replay_buffer = None
         if use_cache:
             shape_meta_json = json.dumps(OmegaConf.to_container(shape_meta), sort_keys=True)
@@ -94,19 +92,11 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
                 lowdim_preprocessor=low_dim_preprocessor
             )
         
-        # Parse shape meta to identify keys
         pointcloud_keys = [k for k, v in shape_meta.obs.items() if v.type == 'pointcloud']
         lowdim_keys = [k for k, v in shape_meta.obs.items() if v.type == 'low_dim']
         
-        print(f"  - Pointcloud keys: {pointcloud_keys}")
-        print(f"  - Low-dim keys: {lowdim_keys}")
-
-        self.check_replay_buffer_keys(replay_buffer, pointcloud_keys, lowdim_keys)
-        
-
         key_first_k = dict()
         if n_obs_steps is not None:
-            # only take first k obs from pointcloud and lowdim data
             for key in pointcloud_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
 
@@ -142,37 +132,7 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         self.horizon = horizon
         self.voxel_size = voxel_size
         self.n_latency_steps = n_latency_steps
-    
-    def check_replay_buffer_keys(self, replay_buffer: ReplayBuffer, pointcloud_keys: List[str], lowdim_keys: List[str]):
-        """
-        Validate that replay buffer contains all expected keys from shape_meta.
-        
-        Args:
-            replay_buffer: The loaded replay buffer
-            pointcloud_keys: Expected pointcloud keys
-            lowdim_keys: Expected lowdim keys
-        """
-        
-        buffer_keys = set(replay_buffer.keys())
-        
-        # Check pointcloud keys
-        for key in pointcloud_keys:
-            if key not in buffer_keys:
-                raise ValueError(f"Expected pointcloud key '{key}' not found in replay buffer. "
-                               f"Available keys: {list(buffer_keys)}")
-        
-        # Check lowdim keys
-        for key in lowdim_keys:
-            if key not in buffer_keys:
-                raise ValueError(f"Expected lowdim key '{key}' not found in replay buffer. "
-                               f"Available keys: {list(buffer_keys)}")
-        
-        # Check action key
-        if 'action' not in buffer_keys:
-            raise ValueError("Expected 'action' key not found in replay buffer. "
-                           f"Available keys: {list(buffer_keys)}")
-        
-        print(f"Validation passed: All expected keys found in replay buffer")
+        self.normalizer = None
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -184,26 +144,45 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
             episode_mask=self.val_mask
         )
         val_set.val_mask = self.val_mask
+        val_set.normalizer = self.normalizer
         return val_set
 
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        self.normalizer = normalizer
 
-    def _normalize_(self, tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
-        # Assuming tcp_list is (N, 9) for 6D rot or (N, 7) for euler+gripper
-        # This needs to be robust to the input shape.
-        tcp_list[:, :3] = (tcp_list[:, :3] - trans_min) / (trans_max - trans_min) * 2 - 1
-        # Normalize gripper which is the last element
-        # The user's dataset uses binary gripper values (0 for closed, 1 for open).
-        # Map 0 to -1 and 1 to 1.
-        if grip_max is not None and grip_min is not None:
-            tcp_list[:, -1] = (tcp_list[:, -1] - grip_min ) / (grip_max - grip_min) *2 -1
-        else:
-            tcp_list[:, -1] = tcp_list[:, -1] * 2 - 1
-        return tcp_list
+    def get_normalizer(self, device='cpu') -> LinearNormalizer:
+        normalizer = LinearNormalizer()
+        
+        all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+        all_robot_obs = torch.from_numpy(self.replay_buffer['robot_obs'][:]).to(device)
+
+        action_trans_data = all_actions[:, :3]
+        obs_trans_data = all_robot_obs[:, :3]
+        obs_grip_data = all_robot_obs[:, 6:7]
+
+        normalizer['action_translation'] = SingleFieldLinearNormalizer.create_fit(action_trans_data)
+        normalizer['obs_translation'] = SingleFieldLinearNormalizer.create_fit(obs_trans_data)
+        normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
+
+        all_colors = []
+        for i in tqdm(range(self.replay_buffer.n_episodes), desc="Calculating PointCloud Color Stats"):
+            data = self.replay_buffer.get_episode(i)
+            points = data['pointcloud']
+            for pc in points:
+                if len(pc) > 0:
+                    all_colors.append(pc[:, 3:6])
+        
+        if all_colors:
+            all_colors = np.concatenate(all_colors, axis=0) 
+            all_colors = torch.from_numpy(all_colors).to(device)
+            color_normalizer = SingleFieldLinearNormalizer.create_fit(all_colors, mode='gaussian')
+            normalizer['pointcloud_color'] = color_normalizer
+        
+        return normalizer
 
     def __len__(self):
         return len(self.sampler)
     
-
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         threadpool_limits(1)
         data = self.sampler.sample_sequence(idx)
@@ -212,61 +191,37 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         obs_dict = {key: data[key][T_slice] for key in self.pointcloud_keys + self.lowdim_keys}
         
         clouds = [obs_dict['pointcloud'][i].astype(np.float32) for i in range(self.n_obs_steps)]
-        robot_obs = np.array([obs_dict['robot_obs'][i] for i in range(self.n_obs_steps)], dtype=np.float32)
+        robot_obs_euler = np.array([obs_dict['robot_obs'][i] for i in range(self.n_obs_steps)], dtype=np.float32)
         
-
-        # Action is (T, 7) with (x,y,z, r,p,y, gripper)
         actions_euler = data['action'].astype(np.float32)
 
-        # =========== 2. MODIFIED: Action Representation Conversion ===========
-        # Convert action from Euler angles to 6D representation for the policy
+        # Convert obs from Euler angles to 6D representation
+        obs_pose_euler = robot_obs_euler[:, :6]
+        obs_gripper = robot_obs_euler[:, 6:]
+        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX')
+        robot_obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
+
+        # Convert action from Euler angles to 6D representation
         pose_euler = actions_euler[:, :6]
         gripper_action = actions_euler[:, 6:]
-
-        pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
-        
+        pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="ZYX")
         actions_10d = np.concatenate([pose_9d, gripper_action], axis=-1)
-
-        obs_pose_euler = robot_obs[:, :6]
-        obs_gripper = robot_obs[:, 6:]
-        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='XYZ')
-        
-        obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
-        robot_obs = obs_10d
-
-
-        # Normalize actions
-        actions_normalized = self._normalize_(actions_10d.copy(), ACTION_TRANS_MAX, ACTION_TRANS_MIN)
-        # Normalize obs
-        robot_obs = self._normalize_(robot_obs, OBS_TRANS_MAX, OBS_TRANS_MIN, OBS_GRIP_MAX, OBS_GRIP_MIN)
 
         # Voxelize for MinkowskiEngine
         input_coords_list = []
         input_feats_list = []
         for cloud in clouds:
             coords = np.ascontiguousarray(cloud[:, :3] / self.voxel_size, dtype=np.int32)
-            input_coords_list.append(coords)
+            # Return unnormalized RGB in features
             input_feats_list.append(cloud.astype(np.float32))
+            input_coords_list.append(coords)
 
         return {
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
-            'robot_obs': torch.from_numpy(robot_obs).float(),
-            'action': torch.from_numpy(actions_10d).float(),
-            'action_normalized': torch.from_numpy(actions_normalized).float(),
-            'action_euler': torch.from_numpy(actions_euler).float()
+            'robot_obs': torch.from_numpy(robot_obs_10d).float(),
+            'action': torch.from_numpy(actions_10d).float()
         }
-
-    def get_normalizer(self, **kwargs) -> LinearNormalizer:
-        # This needs to be implemented according to the data format
-        # For now, returning an identity normalizer
-        normalizer = LinearNormalizer()
-        for key in self.lowdim_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_identity()
-        normalizer['action'] = SingleFieldLinearNormalizer.create_identity()
-        for key in self.pointcloud_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_identity()
-        return normalizer
 
 def collate_fn(batch):
     if not isinstance(batch, list):

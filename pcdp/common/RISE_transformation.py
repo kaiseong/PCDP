@@ -211,7 +211,7 @@ def rot_mat(angles):
     x_mat = rot_mat_x_axis(angles[0])
     y_mat = rot_mat_y_axis(angles[1])
     z_mat = rot_mat_z_axis(angles[2])
-    return x_mat @ y_mat @ z_mat
+    return z_mat @ y_mat @ x_mat
 
 def trans_mat(offsets):
     """

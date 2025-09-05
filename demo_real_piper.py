@@ -46,7 +46,19 @@ workspace_bounds = np.array([
     [-0.100, 0.400]     # Z range (milli meters)
 ])
 
+d405_to_eef = np.array([
+    [1., 0., 0., -0.04],
+    [0., 1., 0., -0.01],
+    [0., 0., 1., -0.03],
+    [0., 0., 0.,  1.0]
+])
 
+robot_to_base = np.array([
+    [1., 0., 0., -0.04],
+    [0., 1., 0., -0.29],
+    [0., 0., 1., -0.03],
+    [0., 0., 0.,  1.0]
+])
 
 
 @click.command()
@@ -89,10 +101,11 @@ def main(output, visual, init_joints, frequency, command_latency):
             
             time.sleep(2.0)
             print('Ready!')
-            preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
+            main_preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                                 workspace_bounds=workspace_bounds,
                                                 enable_sampling=False,
                                                 enable_rgb_normalize=False)
+            
             state = env.get_robot_state()
             target_pose = base_pose.copy()
             t_start = mono_time.now_s()
@@ -158,12 +171,12 @@ def main(output, visual, init_joints, frequency, command_latency):
                     text += ', Recording!'
                 
                 if visual_:
-                    vis_pc = obs["pointcloud"][-1].copy()
+                    vis_pc = obs["main_pointcloud"][-1].copy()
                     vis_pc = np.asarray(vis_pc)
-                    vis_pc = preprocessor(vis_pc)
+                    vis_pc = main_preprocessor(vis_pc)
 
                     pcd.points = o3d.utility.Vector3dVector(vis_pc[:, :3])
-                    pcd.colors = o3d.utility.Vector3dVector(vis_pc[:, 3:6] / 255.0)
+                    pcd.colors = o3d.utility.Vector3dVector(vis_pc[:, 3:6])
                     if first:
                         vis.add_geometry(pcd, reset_bounding_box=True)
                         ctr = vis.get_view_control()

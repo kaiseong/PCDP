@@ -17,6 +17,7 @@ from pcdp.shared_memory.shared_ndarray import SharedNDArray
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from pcdp.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
 from pcdp.real_world.single_orbbec import SingleOrbbec
+from pcdp.real_world.single_realsense import SingleRealSense
 from pcdp.real_world.piper_interpolation_controller import PiperInterpolationController
 from pcdp.real_world.video_recorder import VideoRecorder
 from pcdp.common.replay_buffer import ReplayBuffer
@@ -86,9 +87,9 @@ class EpisodeStreamer:
         
         try:
             batch_data = {}
-            for key in ['pointcloud', 'robot_eef_pose', 'robot_joint', 
+            for key in ['main_pointcloud', 'eef_pointcloud', 'robot_eef_pose', 'robot_joint', 
                 'robot_gripper', 'robot_eef_target','align_timestamp', 
-                'robot_timestamp', 'capture_timestamp'
+                'robot_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp'
             ]:
                 batch_data[key] = np.array([obs[key] for obs in self.obs_batch_buffer])
             # Zarr 배열에 직접 추가
@@ -201,10 +202,11 @@ class Recorder(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         orbbec: SingleOrbbec,
+        d405: SingleRealSense =None,
         robot: PiperInterpolationController,
         output_dir: str,
         compression_level: int = 3,
-        frequency: float = 100.0,  # 10ms polling
+        frequency: float = 200.0,  # 5ms polling
         max_buffer_size: int = 30,
         save_batch_size: int = 1,
         record_rgb: bool = True,
@@ -214,10 +216,11 @@ class Recorder(mp.Process):
         
         self.shm_manager = shm_manager
         self.orbbec = orbbec
+        self.d405 = d405
         self.robot = robot
         self.output_dir = pathlib.Path(output_dir)
         self.compression_level = compression_level
-        self.polling_dt = 1.0 / frequency  # 0.01s = 10ms
+        self.polling_dt = 1.0 / frequency  # 0.005s = 5ms
         self.max_buffer_size = max_buffer_size
         self.save_batch_size = save_batch_size
         self.writer_queue = queue.Queue(maxsize=1024)
@@ -238,11 +241,13 @@ class Recorder(mp.Process):
         # Data buffers for synchronization
         self.robot_buffer = deque(maxlen=max_buffer_size)
         self.action_buffer = deque(maxlen=max_buffer_size)
-        self.orbbec_buffer = deque(maxlen=90)
+        self.orbbec_buffer = deque(maxlen=max_buffer_size)
+        self.d405_buffer = deque(maxlen=max_buffer_size * 2) # D405 runs at higher FPS
 
         # Frame counters
         self.last_orbbec_timestamp = -1
         self.last_robot_timestamp = -1
+        self.last_d405_timestamp = -1
         
         # Control events
         self.stop_event = mp.Event()
@@ -273,16 +278,22 @@ class Recorder(mp.Process):
         )
 
         # rgb recorder
-        self.video_recorder: Optional[VideoRecorder] = None
+        self.orbbec_video_recorder: Optional[VideoRecorder] = None
+        self.d405_video_recorder: Optional[VideoRecorder] = None
+
         if record_rgb:
-            rgb_queue = self.orbbec.rgb_ring_buffer
-            if rgb_queue is None:
-                raise ValueError("SingleOrbbec's rgb_ring_buffer is None.")
-            self.video_recorder = VideoRecorder(
-                shm_manager=shm_manager,
-                rgb_queue=rgb_queue,
-                fps=rgb_fps
-            )
+            if self.orbbec is not None and self.orbbec.rgb_ring_buffer is not None:
+                self.orbbec_video_recorder = VideoRecorder(
+                    shm_manager=shm_manager,
+                    rgb_queue=self.orbbec.rgb_ring_buffer,
+                    fps=rgb_fps,
+                )
+            if self.d405 is not None and self.d405.rgb_ring_buffer is not None:
+                self.d405_video_recorder = VideoRecorder(
+                    shm_manager=shm_manager,
+                    rgb_queue=self.d405.rgb_ring_buffer,
+                    fps=self.d405.put_fps
+                )
     
     def _get_latest_episode_id(self):
         if not self.output_dir.exists():
@@ -349,8 +360,10 @@ class Recorder(mp.Process):
     
     def start(self, wait=True):
         super().start()
-        if self.video_recorder:
-            self.video_recorder.start()
+        if self.orbbec_video_recorder:
+            self.orbbec_video_recorder.start()
+        if self.d405_video_recorder:
+            self.d405_video_recorder.start()
         if wait:
             self.start_wait()
     
@@ -365,25 +378,53 @@ class Recorder(mp.Process):
 
     def stop_process(self):
         self.stop_event.set()
-        if self.video_recorder:
-            self.video_recorder.stop()
+        if self.orbbec_video_recorder:
+            self.orbbec_video_recorder.stop()
+        if self.d405_video_recorder:
+            self.d405_video_recorder.stop()
 
     def _read_orbbec_data(self) -> bool: 
         try:
-            data=self.orbbec.get()
-            if data is not None and 'timestamp' in data:
-                timestamp = data['timestamp']
-                if timestamp > self.last_orbbec_timestamp:
-                    self.last_orbbec_timestamp = timestamp
-                    orbbec_data = {
-                        'pointcloud': data['pointcloud'],
-                        'timestamp': timestamp,
-                        'camera_capture_timestamp': data['camera_capture_timestamp']
-                    }
-                    self.orbbec_buffer.append(orbbec_data)
-                    return True
+            all_data=self.orbbec.get(k=1)
+            if all_data is not None and 'timestamp' in all_data:
+                timestamps = all_data['timestamp']
+                new_data_added = False
+                for i, timestamp in enumerate(timestamps):
+                    if timestamp > self.last_orbbec_timestamp:
+                        orbbec_data = {
+                            'pointcloud': all_data['pointcloud'][i],
+                            'timestamp': timestamp,
+                            'camera_capture_timestamp': all_data['camera_capture_timestamp'][i]
+                        }
+                        self.orbbec_buffer.append(orbbec_data)
+                        self.last_orbbec_timestamp = timestamp
+                        new_data_added = True
+                return new_data_added
         except Exception as e:
             cprint(f"[Recorder] Error reading orbbec data: {e}", "cyan", attrs=["bold"])
+        return False
+    
+    def _read_d405_data(self) -> bool:
+        if self.d405 is None:
+            return False
+        try:
+            all_data = self.d405.get(k=4)
+            if all_data is not None and 'timestamp' in all_data:
+                timestamps = all_data['timestamp']
+                new_data_added = False
+                for i, timestamp in enumerate(timestamps):
+                    if timestamp > self.last_d405_timestamp:
+                        d405_data = {
+                            'pointcloud': all_data['pointcloud'][i],
+                            'timestamp': timestamp,
+                            'camera_capture_timestamp': all_data['camera_capture_timestamp'][i]
+                        }
+                        self.d405_buffer.append(d405_data)
+                        self.last_d405_timestamp = timestamp
+                        new_data_added = True
+                return new_data_added
+        except Exception as e:
+            cprint(f"[Recorder] Error reading d405 data: {e}", "cyan", attrs=["bold"])
         return False
 
 
@@ -419,8 +460,15 @@ class Recorder(mp.Process):
 
         robot_timestamps = np.array([r['robot_receive_timestamp'] for r in self.robot_buffer])
         indices = np.searchsorted(robot_timestamps, orbbec_timestamps, side='right') - 1
-        indices = np.maximum(indices, 0)  # Ensure indices are not negative
-        
+
+        return indices
+
+    def _find_previous_d405_data(self, orbbec_timestamps: np.ndarray) -> np.ndarray:
+        if len(self.d405_buffer) == 0:
+            return np.array([])
+
+        d405_timestamps = np.array([d['timestamp'] for d in self.d405_buffer])
+        indices = np.searchsorted(d405_timestamps, orbbec_timestamps, side='right') - 1
         return indices
 
     def _process_new_data(self):
@@ -446,31 +494,34 @@ class Recorder(mp.Process):
             return
         
         orbbec_timestamps = np.array([od['timestamp'] for od in orbbec_data_list])
+        d405_indices = self._find_previous_d405_data(orbbec_timestamps)
         robot_indices = self._find_previous_robot_data(orbbec_timestamps)
 
-        paired_obs =[]
         for i, orbbec_data in enumerate(orbbec_data_list):
-            if i < len(robot_indices):
-                robot_idx = robot_indices[i]
-                if robot_idx < len(self.robot_buffer):
-                    robot_data = self.robot_buffer[robot_idx]
-                    obs_data={
-                        'pointcloud': orbbec_data['pointcloud'],
-                        'robot_eef_pose': robot_data['robot_eef_pose'],
-                        'robot_joint': robot_data['robot_joint'],
-                        'robot_gripper': robot_data['robot_gripper'],
-                        'robot_eef_target': robot_data['robot_eef_target'],
-                        'align_timestamp': orbbec_data['timestamp'],
-                        'robot_timestamp': robot_data['robot_receive_timestamp'],
-                        'capture_timestamp': orbbec_data['camera_capture_timestamp']
-                    }
-                    
-                    self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
-                else:
-                    cprint(f"[Recorder]] Warning: Robot data index {robot_idx} out of bounds\
-                            for robot_bufer (len {len(self.robot_buffer)}). Skipping obs", "red", attrs=["bold"])
-            else:
-                cprint(f"[Recorder] Warning: No corresponding robot data index found for orbbec_data {i}", "red", attrs=["bold"])
+            robot_idx = robot_indices[i]
+            d405_idx = d405_indices[i]
+
+            if robot_idx < 0 or d405_idx < 0:
+                cprint(f"CRITICAL: Data sync failed for orbbec_timestamp {orbbec_data['timestamp']}. Robot or D405 data is missing.", "red", attrs=["bold"])
+                continue
+            
+            robot_data = self.robot_buffer[robot_idx]
+            d405_data = self.d405_buffer[d405_idx]
+
+            obs_data={
+                'main_pointcloud': orbbec_data['pointcloud'],
+                'eef_pointcloud': d405_data['pointcloud'],
+                'robot_eef_pose': robot_data['robot_eef_pose'],
+                'robot_joint': robot_data['robot_joint'],
+                'robot_gripper': robot_data['robot_gripper'],
+                'robot_eef_target': robot_data['robot_eef_target'],
+                'align_timestamp': orbbec_data['timestamp'],
+                'robot_timestamp': robot_data['robot_receive_timestamp'],
+                'orbbec_capture_timestamp': orbbec_data['camera_capture_timestamp'],
+                'd405_capture_timestamp': d405_data['camera_capture_timestamp']
+            }
+            
+            self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
 
     def _process_action_queue(self):
         try:
@@ -516,16 +567,21 @@ class Recorder(mp.Process):
                         self.recording = True
                         self.recording_event.set()
 
-                        if self.video_recorder:
-                            video_dir = self.output_dir.parent / 'videos'
-                            video_episode_dir = video_dir / f'{self.episode_id:04d}'
-                            video_episode_dir.mkdir(parents=True, exist_ok=True)
-                            video_path = video_episode_dir / '0.mp4'
+                        video_dir = self.output_dir.parent / 'videos'
+                        video_episode_dir = video_dir / f'{self.episode_id:04d}'
+                        video_episode_dir.mkdir(parents=True, exist_ok=True)
 
-                            self.video_recorder.start_episode_recording(str(video_path), self.start_time)
+                        if self.orbbec_video_recorder:
+                            video_path = video_episode_dir / 'orbbec_video.mp4'
+                            self.orbbec_video_recorder.start_episode_recording(str(video_path), self.start_time)
                         
-                        
+                        if self.d405_video_recorder:
+                            video_path = video_episode_dir / 'd405_video.mp4'
+                            self.d405_video_recorder.start_episode_recording(str(video_path), self.start_time)
+
                         self.orbbec_buffer.clear()
+                        if self.d405 is not None:
+                            self.d405_buffer.clear()
                         self.robot_buffer.clear()
 
                         cprint(f"[Recorder] Started recording episode {self.episode_id} from time {self.start_time}", 
@@ -543,8 +599,10 @@ class Recorder(mp.Process):
 
                         self.recording = False
                         self.recording_event.clear()
-                        if self.video_recorder:
-                            self.video_recorder.stop_episode_recording()
+                        if self.orbbec_video_recorder:
+                            self.orbbec_video_recorder.stop_episode_recording()
+                        if self.d405_video_recorder:
+                            self.d405_video_recorder.stop_episode_recording()
                         cprint(f"[Recorder] saved episode {self.episode_id}.", "cyan", attrs=["bold"])
                 
                 elif cmd == RecorderCommand.DROP:
@@ -555,8 +613,10 @@ class Recorder(mp.Process):
                         self.episode_streamer = None
                         self.recording = False
                         self.recording_event.clear()
-                        if self.video_recorder:
-                            self.video_recorder.stop_episode_recording()
+                        if self.orbbec_video_recorder:
+                            self.orbbec_video_recorder.stop_episode_recording()
+                        if self.d405_video_recorder:
+                            self.d405_video_recorder.stop_episode_recording()
                     
 
                     if self.episode_counter > 0:
@@ -632,6 +692,7 @@ class Recorder(mp.Process):
                 
                 # Read data from both sources
                 orbbec_updated = self._read_orbbec_data()
+                d405_updated = self._read_d405_data()
                 robot_updated = self._read_robot_data()
                 self._process_action_queue()
                 

@@ -91,13 +91,25 @@ class TrainPCDPWorkspace(BaseWorkspace):
                 cprint(f"Resuming from checkpoint {lastest_ckpt_path}", "blue", attrs=["bold"])
                 self.load_checkpoint(path=lastest_ckpt_path)
 
+        # device
+        device = torch.device(cfg.training.device)
+
         # dataset
         dataset: BasePointCloudDataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BasePointCloudDataset)
+
+        # create and set normalizer
+        normalizer = dataset.get_normalizer(device=device)
+        self.model.set_normalizer(normalizer)
+        if self.ema_model is not None:
+            self.ema_model.set_normalizer(normalizer)
+
         dataloader = DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
 
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+        if val_dataset is not None and len(val_dataset) > 0:
+            val_dataset.normalizer = normalizer
 
         # env runner
         env_runner: BasePointCloudRunner = hydra.utils.instantiate(
@@ -113,8 +125,6 @@ class TrainPCDPWorkspace(BaseWorkspace):
         if cfg.training.resume and self.global_step > 0:
             lr_scheduler.last_epoch = self.global_step - 1
         
-        # device
-        device = torch.device(cfg.training.device)
         self.model.to(device)
         optimizer_to(self.optimizer, device)
 
@@ -150,10 +160,8 @@ class TrainPCDPWorkspace(BaseWorkspace):
                 # data to device
                 cloud_coords = data['input_coords_list'].to(device)
                 cloud_feats = data['input_feats_list'].to(device)
-                action_data = data['action_normalized'].to(device)
-
+                action_data = data['action'].to(device)
                 robot_obs = data['robot_obs'].to(device)
-                
                 
                 # forward
                 cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
@@ -193,9 +201,10 @@ class TrainPCDPWorkspace(BaseWorkspace):
                         # data to device
                         cloud_coords = data['input_coords_list'].to(device)
                         cloud_feats = data['input_feats_list'].to(device)
-                        action_data = data['action_normalized'].to(device)
+                        action_data = data['action'].to(device)
+                        robot_obs = data['robot_obs'].to(device)
                         cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
-                        loss = self.model(cloud_data, action_data,batch_size=action_data.shape[0])
+                        loss = self.model(cloud_data, action_data, robot_obs, batch_size=action_data.shape[0])
                         val_loss += loss.item()
                 val_loss /= len(val_dataloader)
                 epoch_log['val_loss_epoch'] = val_loss
@@ -231,15 +240,3 @@ class TrainPCDPWorkspace(BaseWorkspace):
         last_ckpt_path = os.path.join(self.output_dir, 'checkpoints', "policy_last.ckpt")
         self.save_checkpoint(path=last_ckpt_path)
         cprint("Training finished!", "green", attrs=["bold"])
-        
-        
-
-
-
-
-
-
-        
-
-
-        

@@ -43,7 +43,6 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_rgb_normalize: True
     enable_filter: True
     nb_points: 15
     sor_std: 1.7
@@ -63,9 +62,6 @@ dataset:
       - [-0.400, 0.350]   # Y range (meters)  
       - [-0.100, 0.400]    # Z range (meters)
     
-    # normalize rgb values
-    rgb_mean: [0.0286, 0.0286, 0.0286]
-    rgb_std: [0.1690, 0.1690, 0.1690]
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:
     robot_to_base:

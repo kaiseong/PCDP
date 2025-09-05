@@ -187,7 +187,7 @@ def main(input, output, match_episode, frequency):
 
                         obs_pose_euler = robot_obs_euler_tf[:6]
                         obs_gripper = robot_obs_euler_tf[6:]
-                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='XYZ').squeeze()
+                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX').squeeze()
                         obs_10d = np.concatenate([obs_9d, obs_gripper])
                     
                         robot_obs_normalized = obs_normalize_(obs_10d, OBS_TRANS_MAX, OBS_TRANS_MIN, OBS_GRIP_MAX, OBS_GRIP_MIN)

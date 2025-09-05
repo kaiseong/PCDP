@@ -35,9 +35,6 @@ class PointCloudPreprocessor:
                 extrinsics_matrix=None,
                 enable_cropping=True,
                 workspace_bounds=None,
-                enable_rgb_normalize=True,
-                rgb_mean=None,
-                rgb_std=None,
                 enable_filter=False,
                 nb_points=15,
                 sor_std=1.7,
@@ -77,15 +74,6 @@ class PointCloudPreprocessor:
         else:
             self.workspace_bounds = workspace_bounds
         
-        if rgb_mean is None:
-            self.rgb_mean = np.array([0.1234, 0.1234, 0.1234])
-        else:
-            self.rgb_mean=rgb_mean
-
-        if rgb_std is None:
-            self.rgb_std = np.array([0.2620, 0.2710, 0.2709])
-        else:
-            self.rgb_std=rgb_std
             
         self.target_num_points = target_num_points
         self.nb_points = nb_points
@@ -93,7 +81,6 @@ class PointCloudPreprocessor:
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
-        self.enable_rgb_normalize = enable_rgb_normalize
         self.enable_filter = enable_filter
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
@@ -126,8 +113,6 @@ class PointCloudPreprocessor:
         # Ensure points is float32
         points = points.astype(np.float32)
 
-        if self.enable_rgb_normalize:
-            points = self._apply_normalize(points)
         # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
@@ -141,14 +126,6 @@ class PointCloudPreprocessor:
             points = self._sample_points(points)
         return points
 
-    def _apply_normalize(self, points):
-        points[:, 3:6] = points[:, 3:6] / 255.0
-        points[:, 3:6] = (points[:, 3:6] - self.rgb_mean) / self.rgb_std
-
-        if self.verbose and len(points) > 0:
-            print(f"mean: {points[:, 3:6].mean()}")
-
-        return points
     def _apply_transform(self, points):
         """Apply extrinsics transformation and scaling."""
         # Scale from mm to m (Orbbec specific)
@@ -288,7 +265,7 @@ class LowDimPreprocessor:
             transformed_pose_6d = rise_tf.mat_to_xyz_rot(
                 T_k_matrix,
                 rotation_rep='euler_angles',
-                rotation_rep_convention='XYZ'
+                rotation_rep_convention='ZYX'
             )
             new_robot_7d = np.concatenate([transformed_pose_6d, [gripper]])
             processed_robot7d.append(new_robot_7d)

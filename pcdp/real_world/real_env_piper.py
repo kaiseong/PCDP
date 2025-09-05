@@ -1,22 +1,13 @@
 from typing import Optional, List
 import pathlib
 import numpy as np
-import time
-import shutil
 import math
 from multiprocessing.managers import SharedMemoryManager
 from pcdp.real_world.piper_interpolation_controller import PiperInterpolationController
 from pcdp.real_world.single_orbbec import SingleOrbbec
+from pcdp.real_world.single_realsense import SingleRealSense
 from pcdp.real_world.recorder import Recorder
-from pcdp.common.timestamp_accumulator import (
-    TimestampObsAccumulator, 
-    TimestampActionAccumulator,
-    align_timestamps
-)
 import pcdp.common.mono_time as mono_time
-from pcdp.common.replay_buffer import ReplayBuffer
-from pcdp.common.cv2_util import (
-    get_image_transform, optimal_row_cols)
 from termcolor import cprint
 
 DEFAULT_OBS_KEY_MAP = {
@@ -75,6 +66,15 @@ class RealEnv:
             mode=orbbec_mode,
             verbose=True
         )
+        
+        d405 = SingleRealSense(
+            shm_manager=shm_manager,
+            resolution = (424, 240),
+            put_fps = capture_fps*2, # 60 fps
+            get_max_k = max_obs_buffer_size*2, # 60
+            num_downsample = 16384,
+            verbose=False
+        )
 
         j_init = np.array([0.0, 0.5, -1.0, 0.0, 1.0, 0.0]) 
         if not init_joints:
@@ -103,13 +103,15 @@ class RealEnv:
         recorder = Recorder(
             shm_manager=shm_manager,
             orbbec=orbbec,
+            d405=d405,
             robot=robot,
             output_dir=str(recorder_data_dir),
             compression_level=2,
-            frequency=100.0
+            frequency=200.0
         )
         
         self.orbbec = orbbec
+        self.d405 = d405
         self.robot = robot
         self.recorder = recorder
         self.capture_fps = capture_fps
@@ -121,6 +123,7 @@ class RealEnv:
         self.output_dir = output_dir
         # temp memory buffers
         self.last_orbbec_data = None
+        self.d405_data=None
         # recording buffers
         self.obs_accumulator = None
         self.action_accumulator = None
@@ -131,11 +134,12 @@ class RealEnv:
     # ======== start-stop API =============
     @property
     def is_ready(self):
-        ready = self.orbbec.is_ready and self.robot.is_ready
+        ready = self.orbbec.is_ready and self.robot.is_ready and self.d405.is_ready
         return ready
     
     def start(self, wait=True):
         self.orbbec.start(wait=False)
+        self.d405.start(wait=False)
         self.robot.start(wait=False)
         self.recorder.start(wait=False)
         if wait:
@@ -145,17 +149,20 @@ class RealEnv:
         self.end_episode()
         self.robot.stop(wait=False)
         self.orbbec.stop(wait=False)
+        self.d405.stop(wait=False)
         self.recorder.stop_process()
         if wait:
             self.stop_wait()
 
     def start_wait(self):
         self.orbbec.start_wait()
+        self.d405.start_wait()
         self.robot.start_wait()
     
     def stop_wait(self):
         self.robot.stop_wait()
         self.orbbec.join()
+        self.d405.join()
         self.recorder.join()
         # self.realsense.stop_wait()
         
@@ -173,12 +180,17 @@ class RealEnv:
         assert self.is_ready
 
         # get data
-        # 30 Hz, camera_receive_timestamp
+        # 30 Hz, camera_receive_timestamp 
         k = math.ceil(self.n_obs_steps * (self.capture_fps / self.frequency))
         self.last_orbbec_data = self.orbbec.get(
             k=k, 
             out=self.last_orbbec_data)
         
+        self.last_d405_data = self.d405.get(
+            k=k*2,
+            out=self.last_d405_data
+        )
+
         
         # 200 hz, robot_receive_timestamp
         # buffer size is 30 
@@ -196,19 +208,31 @@ class RealEnv:
         orbbec_timestamps = self.last_orbbec_data['timestamp']
         orbbec_idxs = list()
         for t in obs_align_timestamps:
-            is_before_idxs = np.nonzero(orbbec_timestamps < t)[0]
+            is_before_idxs = np.nonzero(orbbec_timestamps <= t)[0]
             this_idx = 0
             if len(is_before_idxs) > 0:
                 this_idx = is_before_idxs[-1]
             orbbec_idxs.append(this_idx)
-        orbbec_obs['pointcloud'] = self.last_orbbec_data['pointcloud'][orbbec_idxs]
+        orbbec_obs['main_pointcloud'] = self.last_orbbec_data['pointcloud'][orbbec_idxs]
+
+        d405_obs = dict()
+        d405_timestamps = self.last_d405_data['timestamp']
+        d405_idxs = list()
+        for t in obs_align_timestamps:
+            is_before_idxs = np.nonzero(d405_timestamps <= t)[0]
+            this_idx = 0
+            if len(is_before_idxs) > 0:
+                this_idx = is_before_idxs[-1]
+            d405_idxs.append(this_idx)
+        d405_obs['eef_pointcloud'] = self.last_d405_data['pointcloud'][d405_idxs]
+
 
         # align robot obs
         robot_timestamps = last_robot_data['robot_receive_timestamp']
         this_timestamps = robot_timestamps
         this_idxs = list()
         for t in obs_align_timestamps:
-            is_before_idxs = np.nonzero(this_timestamps < t)[0]
+            is_before_idxs = np.nonzero(this_timestamps <= t)[0]
             this_idx = 0
             if len(is_before_idxs) > 0:
                 this_idx = is_before_idxs[-1]
@@ -235,6 +259,7 @@ class RealEnv:
 
         # return obs
         obs_data = dict(orbbec_obs)
+        obs_data.update(d405_obs)
         obs_data.update(robot_obs)
 
         

@@ -1,18 +1,16 @@
 # single_orbbec.py
-from typing import Optional, Callable, Dict
-import os
-import enum
-import time
-import json
 import numpy as np
 import multiprocessing as mp
-import cv2
-import open3d as o3d
 from threadpoolctl import threadpool_limits
 from multiprocessing.managers import SharedMemoryManager
 import pcdp.common.mono_time as mono_time
 from pcdp.common.orbbec_util import frame_to_rgb_frame
 from termcolor import cprint
+
+import pyorbbecsdk as ob
+from pcdp.common.timestamp_accumulator import get_accumulate_timestamp_idxs
+from pcdp.shared_memory.shared_ndarray import SharedNDArray
+from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 
 # debug
 import csv
@@ -23,14 +21,6 @@ def save_timestamp_duration_to_csv(timestamps, filename):
         writer.writerow(['index', 'timestamp'])
         for i, ts in enumerate(timestamps):
             writer.writerow([i, ts])
-
-
-import pyorbbecsdk as ob
-
-from pcdp.common.timestamp_accumulator import get_accumulate_timestamp_idxs
-from pcdp.shared_memory.shared_ndarray import SharedNDArray
-from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from pcdp.common.orbbec_util import frame_to_bgr_image
 
 class SingleOrbbec(mp.Process):
     MAX_PATH_LENGTH = 4096
@@ -142,7 +132,7 @@ class SingleOrbbec(mp.Process):
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self):
         self.stop()
 
     # ========= user API ===========
@@ -270,10 +260,10 @@ class SingleOrbbec(mp.Process):
                 else:
                     rgb_array = np.zeros((*self.resolution, 3), dtype=np.uint8)
                 
-                receive_time = mono_time.now_s()
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
+                receive_time = mono_time.now_s()
                 depth_time = depth.get_timestamp()
                 rgb_time = color.get_timestamp()
                 if (depth_time - pre_time) > 35:
@@ -285,11 +275,13 @@ class SingleOrbbec(mp.Process):
                     points_data = np.asarray(point_cloud, dtype=np.float32)
                     if len(points_data.shape) == 1:
                         points_data = points_data.reshape(-1, 6)
+                    points_data[3:] = points_data[3:] / 255.0  # RGB [0,1]
                 else:
                     if self.mode == "D2C":
                         points_data = np.zeros((921600, 6), dtype=np.float32)
                     elif self.mode == "C2D":
                         points_data = np.zeros((92160, 6), dtype=np.float32) # 368640 = 640*576  92160 = 320*288
+
 
                 data = dict()
                 data['camera_receive_timestamp'] = receive_time
