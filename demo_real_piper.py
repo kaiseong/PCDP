@@ -101,6 +101,8 @@ def main(output, visual, init_joints, frequency, command_latency):
             
             time.sleep(2.0)
             print('Ready!')
+            
+            
             main_preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                                 workspace_bounds=workspace_bounds,
                                                 enable_sampling=False,
@@ -122,6 +124,9 @@ def main(output, visual, init_joints, frequency, command_latency):
                 opt.point_size = 2.0
                 opt.background_color = np.array([1., 1.0, 1.0])
                 pcd = o3d.geometry.PointCloud()
+                # Add a coordinate frame
+                coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+                vis.add_geometry(coordinate_frame)
             first = True
 
             duration = np.array([])
@@ -170,15 +175,61 @@ def main(output, visual, init_joints, frequency, command_latency):
                 if is_recording:
                     text += ', Recording!'
                 
+                
                 if visual_:
-                    vis_pc = obs["main_pointcloud"][-1].copy()
-                    vis_pc = np.asarray(vis_pc)
-                    vis_pc = main_preprocessor(vis_pc)
+                    # =========== Point Cloud Processing ===========
+                    # 1. Process main (Orbbec) point cloud
+                    main_pc = obs["main_pointcloud"][-1].copy()
+                    main_pc_processed = main_preprocessor.process(main_pc)
 
-                    pcd.points = o3d.utility.Vector3dVector(vis_pc[:, :3])
-                    pcd.colors = o3d.utility.Vector3dVector(vis_pc[:, 3:6])
+                    # 2. Process eef (D405) point cloud
+                    d405_pc = obs['eef_pointcloud'][-1].copy()
+                    robot_eef_pose = obs['robot_eef_pose'][-1] # 6D pose [x,y,z,rx,ry,rz]
+
+                    # Convert 6D eef pose to 4x4 matrix
+                    T_base_eef = np.eye(4)
+                    T_base_eef[:3, :3] = st.Rotation.from_euler('xyz', robot_eef_pose[3:]).as_matrix()
+                    T_base_eef[:3, 3] = robot_eef_pose[:3]
+
+                    # Assemble full TF for D405
+                    T_platform_d405 = robot_to_base @ T_base_eef @ d405_to_eef
+
+                    # Manually apply transformation to D405 points
+                    d405_pc_xyz = d405_pc[:,:3]
+                    d405_pc_rgb = d405_pc[:,3:6]
+                    d405_pc_h = np.hstack((d405_pc_xyz, np.ones((d405_pc_xyz.shape[0], 1))))
+                    d405_pc_transformed_h = (T_platform_d405 @ d405_pc_h.T).T
+                    d405_pc_transformed = np.hstack((d405_pc_transformed_h[:,:3], d405_pc_rgb))
+
+                    # Manually crop D405 points
+                    mask = (
+                        (d405_pc_transformed[:, 0] >= workspace_bounds[0][0]) & 
+                        (d405_pc_transformed[:, 0] <= workspace_bounds[0][1]) &
+                        (d405_pc_transformed[:, 1] >= workspace_bounds[1][0]) & 
+                        (d405_pc_transformed[:, 1] <= workspace_bounds[1][1]) &
+                        (d405_pc_transformed[:, 2] >= workspace_bounds[2][0]) & 
+                        (d405_pc_transformed[:, 2] <= workspace_bounds[2][1])
+                    )
+                    d405_pc_processed = d405_pc_transformed[mask]
+
+                    # Orbbec PCD
+                    pcd_orbbec = o3d.geometry.PointCloud()
+                    pcd_orbbec.points = o3d.utility.Vector3dVector(main_pc_processed[:,:3])
+                    pcd_orbbec.colors = o3d.utility.Vector3dVector(main_pc_processed[:,3:6])
+
+                    # D405 PCD (color it blue)
+                    pcd_d405 = o3d.geometry.PointCloud()
+                    pcd_d405.points = o3d.utility.Vector3dVector(d405_pc_processed[:,:3])
+                    pcd_d405.paint_uniform_color([0, 0, 1]) # Blue
+
+                    # Combine and update
+                    pcd.points = pcd_orbbec.points
+                    pcd.colors = pcd_orbbec.colors
+                    pcd.points.extend(pcd_d405.points)
+                    pcd.colors.extend(pcd_d405.colors)
+
                     if first:
-                        vis.add_geometry(pcd, reset_bounding_box=True)
+                        vis.add_geometry(pcd)
                         ctr = vis.get_view_control()
                         bbox = pcd.get_axis_aligned_bounding_box()
                         ctr.set_lookat(bbox.get_center())
