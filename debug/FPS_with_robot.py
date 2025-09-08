@@ -48,7 +48,7 @@ robot_to_base = np.array([
 
 def main():
 
-    pc_preprocess = PointCloudPreprocessor(enable_rgb_normalize=False,
+    pc_preprocess = PointCloudPreprocessor(
                                            enable_sampling=False,
                                           enable_filter=True,
                                           enable_transform=True,
@@ -169,6 +169,7 @@ def main():
             frame = align.process(frames)
             pc_filter.set_position_data_scaled(depth.get_depth_scale())
             point_cloud = pc_filter.calculate(pc_filter.process(frame))
+            print(point_cloud[15000])
             pc=np.asarray(point_cloud) 
             pc = pc[pc[:, 2] > 0.0]
             pc = pc_preprocess.process(pc)

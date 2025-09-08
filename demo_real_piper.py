@@ -106,7 +106,7 @@ def main(output, visual, init_joints, frequency, command_latency):
             main_preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                                 workspace_bounds=workspace_bounds,
                                                 enable_sampling=False,
-                                                enable_rgb_normalize=False)
+                                                )
             
             state = env.get_robot_state()
             target_pose = base_pose.copy()
@@ -220,7 +220,7 @@ def main(output, visual, init_joints, frequency, command_latency):
                     # D405 PCD (color it blue)
                     pcd_d405 = o3d.geometry.PointCloud()
                     pcd_d405.points = o3d.utility.Vector3dVector(d405_pc_processed[:,:3])
-                    pcd_d405.paint_uniform_color([0, 0, 1]) # Blue
+                    pcd_d405.colors = o3d.utility.Vector3dVector(d405_pc_processed[:,3:6])
 
                     # Combine and update
                     pcd.points = pcd_orbbec.points

@@ -263,6 +263,7 @@ class SingleOrbbec(mp.Process):
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
+
                 receive_time = mono_time.now_s()
                 depth_time = depth.get_timestamp()
                 rgb_time = color.get_timestamp()
@@ -275,12 +276,9 @@ class SingleOrbbec(mp.Process):
                     points_data = np.asarray(point_cloud, dtype=np.float32)
                     if len(points_data.shape) == 1:
                         points_data = points_data.reshape(-1, 6)
-                    points_data[3:] = points_data[3:] / 255.0  # RGB [0,1]
+                    points_data[:, 3:] = points_data[:, 3:] / 255.0  # RGB [0,1]
                 else:
-                    if self.mode == "D2C":
-                        points_data = np.zeros((921600, 6), dtype=np.float32)
-                    elif self.mode == "C2D":
-                        points_data = np.zeros((92160, 6), dtype=np.float32) # 368640 = 640*576  92160 = 320*288
+                    points_data = np.empty((0, 6), dtype=np.float32)
 
 
                 data = dict()
@@ -336,12 +334,16 @@ class SingleOrbbec(mp.Process):
                 
                 
         except Exception as e:
+            with open("/tmp/orbbec_error.log", "w") as f:
+                f.write(f"Error in SingleOrbbec main loop: {e}\n")
+                import traceback
+                traceback.print_exc(file=f)
             cprint(f"[SingleOrbbec] Error in main loop: {e}", "green", attrs=["bold"])
             import traceback
             traceback.print_exc()
         finally:
             pipeline.stop()
-            self.ready_event.set()
+            # self.ready_event.set()
             cprint(f"anormaly_cnt: {anormaly_cnt}", "green", attrs=["bold"])
             if self.verbose:
                 cprint("[SingleOrbbec] Main loop ended, resources cleaned up.", "green", attrs=["bold"])

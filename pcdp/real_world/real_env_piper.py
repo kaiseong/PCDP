@@ -9,6 +9,7 @@ from pcdp.real_world.single_realsense import SingleRealSense
 from pcdp.real_world.recorder import Recorder
 import pcdp.common.mono_time as mono_time
 from termcolor import cprint
+import time
 
 DEFAULT_OBS_KEY_MAP = {
     # robot
@@ -75,6 +76,7 @@ class RealEnv:
             num_downsample = 16384,
             verbose=False
         )
+        # d405 = None
 
         j_init = np.array([0.0, 0.5, -1.0, 0.0, 1.0, 0.0]) 
         if not init_joints:
@@ -123,7 +125,7 @@ class RealEnv:
         self.output_dir = output_dir
         # temp memory buffers
         self.last_orbbec_data = None
-        self.d405_data=None
+        self.last_d405_data=None
         # recording buffers
         self.obs_accumulator = None
         self.action_accumulator = None
@@ -134,13 +136,18 @@ class RealEnv:
     # ======== start-stop API =============
     @property
     def is_ready(self):
-        ready = self.orbbec.is_ready and self.robot.is_ready and self.d405.is_ready
+        ready = self.orbbec.is_ready and self.robot.is_ready
+        if self.d405 is not None:
+            ready = ready and self.d405.is_ready
         return ready
     
     def start(self, wait=True):
         self.orbbec.start(wait=False)
-        self.d405.start(wait=False)
+        if self.d405 is not None:
+            self.d405.start(wait=False)
         self.robot.start(wait=False)
+        # warm up
+        time.sleep(2)
         self.recorder.start(wait=False)
         if wait:
             self.start_wait()
@@ -149,20 +156,23 @@ class RealEnv:
         self.end_episode()
         self.robot.stop(wait=False)
         self.orbbec.stop(wait=False)
-        self.d405.stop(wait=False)
+        if self.d405 is not None:
+            self.d405.stop(wait=False)
         self.recorder.stop_process()
         if wait:
             self.stop_wait()
 
     def start_wait(self):
         self.orbbec.start_wait()
-        self.d405.start_wait()
+        if self.d405 is not None:
+            self.d405.start_wait()
         self.robot.start_wait()
     
     def stop_wait(self):
         self.robot.stop_wait()
         self.orbbec.join()
-        self.d405.join()
+        if self.d405 is not None:
+            self.d405.join()
         self.recorder.join()
         # self.realsense.stop_wait()
         
@@ -186,10 +196,11 @@ class RealEnv:
             k=k, 
             out=self.last_orbbec_data)
         
-        self.last_d405_data = self.d405.get(
-            k=k*2,
-            out=self.last_d405_data
-        )
+        if self.d405 is not None:
+            self.last_d405_data = self.d405.get(
+                k=k*2,
+                out=self.last_d405_data
+            )
 
         
         # 200 hz, robot_receive_timestamp
@@ -215,16 +226,17 @@ class RealEnv:
             orbbec_idxs.append(this_idx)
         orbbec_obs['main_pointcloud'] = self.last_orbbec_data['pointcloud'][orbbec_idxs]
 
-        d405_obs = dict()
-        d405_timestamps = self.last_d405_data['timestamp']
-        d405_idxs = list()
-        for t in obs_align_timestamps:
-            is_before_idxs = np.nonzero(d405_timestamps <= t)[0]
-            this_idx = 0
-            if len(is_before_idxs) > 0:
-                this_idx = is_before_idxs[-1]
-            d405_idxs.append(this_idx)
-        d405_obs['eef_pointcloud'] = self.last_d405_data['pointcloud'][d405_idxs]
+        if self.d405 is not None:
+            d405_obs = dict()
+            d405_timestamps = self.last_d405_data['timestamp']
+            d405_idxs = list()
+            for t in obs_align_timestamps:
+                is_before_idxs = np.nonzero(d405_timestamps <= t)[0]
+                this_idx = 0
+                if len(is_before_idxs) > 0:
+                    this_idx = is_before_idxs[-1]
+                d405_idxs.append(this_idx)
+            d405_obs['eef_pointcloud'] = self.last_d405_data['pointcloud'][d405_idxs]
 
 
         # align robot obs
@@ -259,7 +271,8 @@ class RealEnv:
 
         # return obs
         obs_data = dict(orbbec_obs)
-        obs_data.update(d405_obs)
+        if self.d405 is not None:
+            obs_data.update(d405_obs)
         obs_data.update(robot_obs)
 
         

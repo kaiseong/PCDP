@@ -301,7 +301,7 @@ class PiperInterpolationController(mp.Process):
             
             # init pose
             if self.joints_init is not None:
-                piper.MotionCtrl_2(0x01, 0x01, 50, 0x00)
+                piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
                 piper.JointCtrl(self._rad_to_sdk_joint(self.joints_init))
             
             # main loop
@@ -377,13 +377,13 @@ class PiperInterpolationController(mp.Process):
                 
                 # 4. Calculate IK using the most recent joint state
                 if self.mode == "EndPose":
-                    piper.MotionCtrl_2(0x01, 0x00, 50, 0x00)
+                    piper.MotionCtrl_2(0x01, 0x00, 100, 0x00)
                     piper.EndPoseCtrl(target)
                 else:
                     target_joints = self.ik_controller.calculate_ik(target_se3, last_q)
                     
                     if target_joints is not None:
-                        piper.MotionCtrl_2(0x01, 0x01, 50, 0x00) # Using a moderate speed
+                        piper.MotionCtrl_2(0x01, 0x01, 100, 0x00) # Using a moderate speed
                         piper.JointCtrl(self._rad_to_sdk_joint(target_joints))
                     else:
                         if self.verbose:

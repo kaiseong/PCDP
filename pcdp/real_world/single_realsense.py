@@ -99,7 +99,7 @@ class SingleRealSense(mp.Process):
         shape = resolution[::-1]
         examples_ = dict()
 
-        examples_['color'] = np.empty(
+        examples_['image'] = np.empty(
             shape=(*shape, 3), dtype=np.uint8)
         examples_['camera_capture_timestamp'] = 0.0
         examples_['camera_receive_timestamp'] = 0.0
@@ -252,8 +252,8 @@ class SingleRealSense(mp.Process):
 
             self.intrinsics_array.get()[0] = color_intr.fx
             self.intrinsics_array.get()[1] = color_intr.fy
-            self.intrinsics_array.get()[2] = color_intr.cx
-            self.intrinsics_array.get()[3] = color_intr.cy
+            self.intrinsics_array.get()[2] = color_intr.ppx
+            self.intrinsics_array.get()[3] = color_intr.ppy
             self.intrinsics_array.get()[4] = color_intr.height
             self.intrinsics_array.get()[5] = color_intr.width
 
@@ -345,12 +345,16 @@ class SingleRealSense(mp.Process):
                 
                 
         except Exception as e:
+            with open("/tmp/realsense_error.log", "w") as f:
+                f.write(f"Error in SingleRealSense main loop: {e}\n")
+                import traceback
+                traceback.print_exc(file=f)
             cprint(f"[SingleRealSense] Error in main loop: {e}", "red", attrs=["bold"])
             import traceback
             traceback.print_exc()
         finally:
             pipeline.stop()
-            self.ready_event.set()
+            # self.ready_event.set()
             cprint(f"anormaly_cnt: {anormaly_cnt}", "red", attrs=["bold"])
             if self.verbose:
                 cprint("[SingleRealSense] Main loop ended, resources cleaned up.", "red", attrs=["bold"])

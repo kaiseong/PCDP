@@ -89,7 +89,7 @@ def main():
     for _ in range(15):
         pipe.wait_for_frames()
 
-    use_vis = False  # 필요시 True
+    use_vis = True  # 필요시 True
     if use_vis:
         vis = o3d.visualization.Visualizer()
         vis.create_window("D405 Colored PointCloud", 1280, 720)
@@ -119,7 +119,6 @@ def main():
 
             arr = rs_points_to_array(points, color,
                                      min_z=0.07, max_z=0.50, bilinear=True)
-            breakpoint()
             make_pc_ms = np.append(make_pc_ms, mono_time.now_ms()-t0)
 
             if arr.shape[0] == 0:

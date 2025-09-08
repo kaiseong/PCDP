@@ -12,9 +12,6 @@ import numcodecs
 from collections import deque
 import shutil
 import queue
-from pcdp.common.timestamp_accumulator import align_timestamps
-from pcdp.shared_memory.shared_ndarray import SharedNDArray
-from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from pcdp.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
 from pcdp.real_world.single_orbbec import SingleOrbbec
 from pcdp.real_world.single_realsense import SingleRealSense
@@ -89,7 +86,7 @@ class EpisodeStreamer:
             batch_data = {}
             for key in ['main_pointcloud', 'eef_pointcloud', 'robot_eef_pose', 'robot_joint', 
                 'robot_gripper', 'robot_eef_target','align_timestamp', 
-                'robot_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp'
+                'robot_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp', 'd405_timestamp'
             ]:
                 batch_data[key] = np.array([obs[key] for obs in self.obs_batch_buffer])
             # Zarr 배열에 직접 추가
@@ -202,9 +199,9 @@ class Recorder(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         orbbec: SingleOrbbec,
-        d405: SingleRealSense =None,
         robot: PiperInterpolationController,
         output_dir: str,
+        d405: SingleRealSense = None,
         compression_level: int = 3,
         frequency: float = 200.0,  # 5ms polling
         max_buffer_size: int = 30,
@@ -386,6 +383,7 @@ class Recorder(mp.Process):
     def _read_orbbec_data(self) -> bool: 
         try:
             all_data=self.orbbec.get(k=1)
+            
             if all_data is not None and 'timestamp' in all_data:
                 timestamps = all_data['timestamp']
                 new_data_added = False
@@ -517,8 +515,9 @@ class Recorder(mp.Process):
                 'robot_eef_target': robot_data['robot_eef_target'],
                 'align_timestamp': orbbec_data['timestamp'],
                 'robot_timestamp': robot_data['robot_receive_timestamp'],
+                'd405_timestamp': d405_data['timestamp'],
                 'orbbec_capture_timestamp': orbbec_data['camera_capture_timestamp'],
-                'd405_capture_timestamp': d405_data['camera_capture_timestamp']
+                'd405_capture_timestamp': d405_data['camera_capture_timestamp'],
             }
             
             self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})

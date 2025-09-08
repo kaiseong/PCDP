@@ -87,9 +87,8 @@ def point_cloud_visualize(obs_episode):
     preprocess = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
-                                        enable_rgb_normalize=False,
                                         enable_filter=True)
-    pts_seq = obs_episode['pointcloud']
+    pts_seq = obs_episode['main_pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
         return
@@ -151,9 +150,9 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
     with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['index', 'align_timestamp'])
+        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'd405_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp' ])
         for i, ts in enumerate(obs_align_timestamp):
-            writer.writerow([i, ts])
+            writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['d405_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['d405_capture_timestamp'][i] ])
 
     with open(f"{output_filename_prefix}_action.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -164,6 +163,6 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/simple_stack_3_output_final/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0004')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0004')
+    analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/d405_test/recorder_data")
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0001')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0001')
