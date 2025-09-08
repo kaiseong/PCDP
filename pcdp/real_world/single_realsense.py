@@ -324,7 +324,7 @@ class SingleRealSense(mp.Process):
                 data_ = dict()
                 data_['camera_receive_timestamp'] = receive_time
                 data_['camera_capture_timestamp'] = rgb_time
-                data_['image'] = rgb_array
+                data_['image'] = rgb_array[:, :, ::-1] # BGR->RGB
 
 
                 put_data = data
