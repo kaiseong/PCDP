@@ -108,7 +108,7 @@ def point_cloud_visualize(obs_episode):
     for i, pts in enumerate(pts_seq):
         pc=preprocess(pts)
         xyz = pc[:, :3].astype(np.float64)
-        rgb = pc[:, 3:6].astype(np.float64) / 255.0
+        rgb = pc[:, 3:6].astype(np.float64) 
         
         pcd.points = o3d.utility.Vector3dVector(xyz)
         pcd.colors = o3d.utility.Vector3dVector(rgb)

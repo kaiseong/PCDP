@@ -47,10 +47,10 @@ workspace_bounds = np.array([
 ])
 
 d405_to_eef = np.array([
-    [1., 0., 0., -0.04],
-    [0., 1., 0., -0.01],
-    [0., 0., 1., -0.03],
-    [0., 0., 0.,  1.0]
+    [  -0.000,   -0.839,   0.545,   -0.0650],
+    [   1.000,   -0.000,  -0.000,  0.015],
+    [   0.000,   0.545,   0.839,  0.035],
+    [   0.000,   0.000,   0.000,   1.000]
 ])
 
 robot_to_base = np.array([
@@ -105,6 +105,7 @@ def main(output, visual, init_joints, frequency, command_latency):
             
             main_preprocessor = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                                 workspace_bounds=workspace_bounds,
+                                                enable_filter=True,
                                                 enable_sampling=False,
                                                 )
             

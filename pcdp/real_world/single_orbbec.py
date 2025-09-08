@@ -260,11 +260,13 @@ class SingleOrbbec(mp.Process):
                 else:
                     rgb_array = np.zeros((*self.resolution, 3), dtype=np.uint8)
                 
+                receive_time = mono_time.now_s()
+
                 frame = align.process(frames)
                 pc_filter.set_position_data_scaled(depth.get_depth_scale())
                 point_cloud = pc_filter.calculate(pc_filter.process(frame))  # (N,6) float32
 
-                receive_time = mono_time.now_s()
+                
                 depth_time = depth.get_timestamp()
                 rgb_time = color.get_timestamp()
                 if (depth_time - pre_time) > 35:

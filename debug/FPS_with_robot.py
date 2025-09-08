@@ -8,7 +8,13 @@ from piper_sdk import *
 import time
 import pinocchio as pin
 from pinocchio.robot_wrapper import RobotWrapper
-from pinocchio.robot_wrapper import RobotWrapper
+
+d405_to_eef = np.array([
+    [  -0.0,  -0.866,   0.500,   -0.0650],
+    [  1.0,   -0.000,  -0.00,  0.000],
+    [   0.0,   0.5,   0.866,  0.035],
+    [  0.000,   0.000,   0.000,   1.000]
+])
 
 
 def piper_eef_to_SE3_base(eef_mm_deg):
@@ -47,7 +53,7 @@ robot_to_base = np.array([
 ])
 
 def main():
-
+    
     pc_preprocess = PointCloudPreprocessor(
                                            enable_sampling=False,
                                           enable_filter=True,
@@ -126,7 +132,8 @@ def main():
         opt.point_size = 2.0
         opt.background_color = np.array([0.4, 0.45, 0.4])
         pcd = o3d.geometry.PointCloud()
-        eef_frame = None # Placeholder for the coordinate frame
+        eef_frame = None # Placeholder for the EEF coordinate frame
+        d405_frame = None # Placeholder for the D405 coordinate frame
 
     first_iter = True
     
@@ -159,6 +166,9 @@ def main():
             # Transform to the world frame for visualization
             T_k_matrix = robot_to_base @ eef_to_robot_base_k
 
+            # Calculate the D405 camera pose in the world frame
+            T_d405_world = T_k_matrix @ d405_to_eef
+
             frames = pipeline.wait_for_frames(1)
             if frames is None:
                 continue
@@ -185,17 +195,24 @@ def main():
                 pcd.points = o3d.utility.Vector3dVector(pc[:, :3])
                 pcd.colors = o3d.utility.Vector3dVector(pc[:, 3:6] / 255.0)
 
-                # Remove the old frame if it exists
+                # Remove the old frames if they exist
                 if eef_frame is not None:
                     vis.remove_geometry(eef_frame, reset_bounding_box=False)
+                if d405_frame is not None:
+                    vis.remove_geometry(d405_frame, reset_bounding_box=False)
 
-                # Create a new frame, transform it, and add it
+                # Create, transform, and add EEF frame
                 eef_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
                 eef_frame.transform(T_k_matrix)
+
+                # Create, transform, and add D405 frame
+                d405_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.03)
+                d405_frame.transform(T_d405_world)
                 
                 if first_iter:
                     vis.add_geometry(pcd, reset_bounding_box=True)
                     vis.add_geometry(eef_frame, reset_bounding_box=False)
+                    vis.add_geometry(d405_frame, reset_bounding_box=False)
                     ctr = vis.get_view_control()
                     bbox = pcd.get_axis_aligned_bounding_box()
                     ctr.set_lookat(bbox.get_center())
@@ -205,6 +222,7 @@ def main():
                     first_iter = False
                 else:
                     vis.add_geometry(eef_frame, reset_bounding_box=False)
+                    vis.add_geometry(d405_frame, reset_bounding_box=False)
                     vis.update_geometry(pcd)
 
                 vis.poll_events()

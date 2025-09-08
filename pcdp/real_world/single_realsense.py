@@ -283,6 +283,8 @@ class SingleRealSense(mp.Process):
                 else:
                     rgb_array = np.zeros((h,w, 3), dtype=np.uint8)
                 
+                receive_time = mono_time.now_s()
+                
                 pc.map_to(color)
                 points= pc.calculate(depth)
                 point_cloud = rs_points_to_array(points, color,
@@ -301,7 +303,7 @@ class SingleRealSense(mp.Process):
                 depth_time = depth.get_timestamp()
                 rgb_time = color.get_timestamp()
 
-                receive_time = mono_time.now_s()
+                
                 if (depth_time - pre_time) > (1/self.put_fps)*1000+5:
                     anormaly_cnt+=1
                 pre_time=depth_time
