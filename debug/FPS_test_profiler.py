@@ -64,7 +64,7 @@ def main():
             pc=np.asarray(point_cloud) 
             pc = pc[pc[:, 2] > 0.0]
             mean_z = pc[:,2].mean()
-            print(mean_z)
+            
 
             if cnt>200:
                 start=mono_time.now_ms()

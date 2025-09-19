@@ -84,13 +84,12 @@ class EpisodeStreamer:
         
         try:
             batch_data = {}
-            for key in ['main_pointcloud', 'eef_pointcloud', 'robot_eef_pose', 'robot_joint', 
-                'robot_gripper', 'robot_eef_target','align_timestamp', 
-                'robot_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp', 'd405_timestamp'
-            ]:
+            # Infer keys from the first observation, assuming all obs in the batch have the same keys.
+            keys_to_save = self.obs_batch_buffer[0].keys()
+            for key in keys_to_save:
                 batch_data[key] = np.array([obs[key] for obs in self.obs_batch_buffer])
+
             # Zarr 배열에 직접 추가
-            
             self._append_to_zarr_arrays(batch_data, 'obs')
             self.obs_total_frames += len(self.obs_batch_buffer)
             
@@ -239,7 +238,9 @@ class Recorder(mp.Process):
         self.robot_buffer = deque(maxlen=max_buffer_size)
         self.action_buffer = deque(maxlen=max_buffer_size)
         self.orbbec_buffer = deque(maxlen=max_buffer_size)
-        self.d405_buffer = deque(maxlen=max_buffer_size * 2) # D405 runs at higher FPS
+        self.d405_buffer = None
+        if self.d405 is not None:
+            self.d405_buffer = deque(maxlen=max_buffer_size * 2) # D405 runs at higher FPS
 
         # Frame counters
         self.last_orbbec_timestamp = -1
@@ -492,33 +493,44 @@ class Recorder(mp.Process):
             return
         
         orbbec_timestamps = np.array([od['timestamp'] for od in orbbec_data_list])
-        d405_indices = self._find_previous_d405_data(orbbec_timestamps)
         robot_indices = self._find_previous_robot_data(orbbec_timestamps)
+
+        # Conditionally find D405 data
+        d405_indices = None
+        if self.d405 is not None:
+            d405_indices = self._find_previous_d405_data(orbbec_timestamps)
 
         for i, orbbec_data in enumerate(orbbec_data_list):
             robot_idx = robot_indices[i]
-            d405_idx = d405_indices[i]
-
-            if robot_idx < 0 or d405_idx < 0:
-                cprint(f"CRITICAL: Data sync failed for orbbec_timestamp {orbbec_data['timestamp']}. Robot or D405 data is missing.", "red", attrs=["bold"])
+            if robot_idx < 0:
+                cprint(f"CRITICAL: Data sync failed for orbbec_timestamp {orbbec_data['timestamp']}. Robot data is missing.", "red", attrs=["bold"])
                 continue
             
             robot_data = self.robot_buffer[robot_idx]
-            d405_data = self.d405_buffer[d405_idx]
 
+            # Base observation data
             obs_data={
                 'main_pointcloud': orbbec_data['pointcloud'],
-                'eef_pointcloud': d405_data['pointcloud'],
                 'robot_eef_pose': robot_data['robot_eef_pose'],
                 'robot_joint': robot_data['robot_joint'],
                 'robot_gripper': robot_data['robot_gripper'],
                 'robot_eef_target': robot_data['robot_eef_target'],
                 'align_timestamp': orbbec_data['timestamp'],
                 'robot_timestamp': robot_data['robot_receive_timestamp'],
-                'd405_timestamp': d405_data['timestamp'],
-                'orbbec_capture_timestamp': orbbec_data['camera_capture_timestamp'],
-                'd405_capture_timestamp': d405_data['camera_capture_timestamp'],
+                'orbbec_capture_timestamp': orbbec_data['camera_capture_timestamp']
             }
+
+            # Handle D405 data conditionally
+            if self.d405 is not None:
+                d405_idx = d405_indices[i]
+                if d405_idx < 0:
+                    cprint(f"CRITICAL: Data sync failed for orbbec_timestamp {orbbec_data['timestamp']}. D405 data is missing.", "red", attrs=["bold"])
+                    continue
+                d405_data = self.d405_buffer[d405_idx]
+                # Add D405 data to the observation
+                obs_data['eef_pointcloud'] = d405_data['pointcloud']
+                obs_data['d405_timestamp'] = d405_data['timestamp']
+                obs_data['d405_capture_timestamp'] = d405_data['camera_capture_timestamp']
             
             self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
 

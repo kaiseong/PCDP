@@ -14,6 +14,7 @@ import numpy as np
 import open3d as o3d
 import time
 import pcdp.common.mono_time as mono_time
+import cv2
 
 
 def rs_points_to_array(points: rs.points,
@@ -78,12 +79,34 @@ def main():
     try:
         depth_sensor = profile.get_device().first_depth_sensor()
         if depth_sensor.supports(rs.option.visual_preset):
-            depth_sensor.set_option(rs.option.visual_preset, 4.0)  # High Accuracy
+            depth_sensor.set_option(rs.option.visual_preset, 5.0)  # High Accuracy
     except Exception:
         print("not support")
         pass
 
     pc = rs.pointcloud()
+
+    # Post-Processing 필터 초기화
+    decimation = rs.decimation_filter()
+    decimation.set_option(rs.option.filter_magnitude, 2)
+
+    threshold = rs.threshold_filter()
+    threshold.set_option(rs.option.min_distance, 0.05)  # 10cm
+    threshold.set_option(rs.option.max_distance, 0.5)  # 50cm
+
+    depth_to_disparity = rs.disparity_transform(True)
+    disparity_to_depth = rs.disparity_transform(False)
+
+    spatial = rs.spatial_filter()
+    spatial.set_option(rs.option.filter_magnitude, 2)
+    spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
+    spatial.set_option(rs.option.filter_smooth_delta, 20)
+    spatial.set_option(rs.option.holes_fill, 3)
+
+    temporal = rs.temporal_filter()
+    temporal.set_option(rs.option.filter_smooth_alpha, 0.4)
+    temporal.set_option(rs.option.filter_smooth_delta, 20)
+    # temporal.set_option(rs.option.persistence_control, 3)
 
     # 워밍업
     for _ in range(15):
@@ -104,13 +127,25 @@ def main():
 
 
     try:
-        for _ in range(500):
+        for _ in range(50000):
             frames = pipe.wait_for_frames()
 
             depth = frames.get_depth_frame()
             color = frames.get_color_frame()
             if not depth or not color:
                 continue
+
+            # Post-Processing 필터 적용
+            # Decimation은 해상도를 바꾸므로 color와 매칭이 깨질 수 있어 주석 처리합니다.
+            # 사용하려면 rs.align 처리가 추가로 필요합니다.
+            # depth = decimation.process(depth)
+            
+            depth = threshold.process(depth)
+            depth = depth_to_disparity.process(depth)
+            depth = spatial.process(depth)
+            depth = temporal.process(depth)
+            depth = disparity_to_depth.process(depth)
+
             print(f"depth: {depth.get_timestamp()}, color: {color.get_timestamp()}")
             t0 = mono_time.now_ms()
             # UV 계산 + 포인트클라우드
@@ -118,7 +153,8 @@ def main():
             points = pc.calculate(depth)
 
             arr = rs_points_to_array(points, color,
-                                     min_z=0.07, max_z=0.50, bilinear=True)
+                                     min_z=0.04, max_z=0.50, bilinear=True)
+            print(f"arr.shape: {arr.shape}")
             make_pc_ms = np.append(make_pc_ms, mono_time.now_ms()-t0)
 
             if arr.shape[0] == 0:

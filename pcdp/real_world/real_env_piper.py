@@ -68,15 +68,15 @@ class RealEnv:
             verbose=True
         )
         
-        d405 = SingleRealSense(
-            shm_manager=shm_manager,
-            resolution = (424, 240),
-            put_fps = capture_fps*2, # 60 fps
-            get_max_k = max_obs_buffer_size*2, # 60
-            num_downsample = 16384,
-            verbose=False
-        )
-        # d405 = None
+        # d405 = SingleRealSense(
+        #     shm_manager=shm_manager,
+        #     resolution = (424, 240),
+        #     put_fps = capture_fps*2, # 60 fps
+        #     get_max_k = max_obs_buffer_size*2, # 60
+        #     num_downsample = 36000,
+        #     verbose=False
+        # )
+        d405 = None
 
         j_init = np.array([0.0, 0.5, -1.0, 0.0, 1.0, 0.0]) 
         if not init_joints:

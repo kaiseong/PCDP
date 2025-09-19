@@ -150,9 +150,15 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
     with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'd405_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp' ])
+        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'orbbec_capture_timestamp' ])
         for i, ts in enumerate(obs_align_timestamp):
-            writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['d405_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['d405_capture_timestamp'][i] ])
+            writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i] ])
+
+    # with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
+    #     writer = csv.writer(csvfile)
+    #     writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'd405_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp' ])
+    #     for i, ts in enumerate(obs_align_timestamp):
+    #         writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['d405_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['d405_capture_timestamp'][i] ])
 
     with open(f"{output_filename_prefix}_action.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -163,6 +169,6 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/d405_test/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0001')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0001')
+    analyzer = EpisodeAnalyzer("/home/moai/pcdp/test2/recorder_data")
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0003')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0003')

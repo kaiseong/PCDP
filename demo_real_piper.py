@@ -94,6 +94,8 @@ def main(output, visual, init_joints, frequency, command_latency):
             ) as env:
             cv2.setNumThreads(1)
             
+            include_d405 = False
+
             base_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
             plan_time = mono_time.now_s() + 2.0
             env.exec_actions([base_pose], [plan_time])
@@ -184,7 +186,8 @@ def main(output, visual, init_joints, frequency, command_latency):
                     main_pc_processed = main_preprocessor.process(main_pc)
 
                     # 2. Process eef (D405) point cloud
-                    d405_pc = obs['eef_pointcloud'][-1].copy()
+                    if include_d405:
+                        d405_pc = obs['eef_pointcloud'][-1].copy()
                     robot_eef_pose = obs['robot_eef_pose'][-1] # 6D pose [x,y,z,rx,ry,rz]
 
                     # Convert 6D eef pose to 4x4 matrix
@@ -196,38 +199,41 @@ def main(output, visual, init_joints, frequency, command_latency):
                     T_platform_d405 = robot_to_base @ T_base_eef @ d405_to_eef
 
                     # Manually apply transformation to D405 points
-                    d405_pc_xyz = d405_pc[:,:3]
-                    d405_pc_rgb = d405_pc[:,3:6]
-                    d405_pc_h = np.hstack((d405_pc_xyz, np.ones((d405_pc_xyz.shape[0], 1))))
-                    d405_pc_transformed_h = (T_platform_d405 @ d405_pc_h.T).T
-                    d405_pc_transformed = np.hstack((d405_pc_transformed_h[:,:3], d405_pc_rgb))
+                    if include_d405:
+                        d405_pc_xyz = d405_pc[:,:3]
+                        d405_pc_rgb = d405_pc[:,3:6]
+                        d405_pc_h = np.hstack((d405_pc_xyz, np.ones((d405_pc_xyz.shape[0], 1))))
+                        d405_pc_transformed_h = (T_platform_d405 @ d405_pc_h.T).T
+                        d405_pc_transformed = np.hstack((d405_pc_transformed_h[:,:3], d405_pc_rgb))
 
-                    # Manually crop D405 points
-                    mask = (
-                        (d405_pc_transformed[:, 0] >= workspace_bounds[0][0]) & 
-                        (d405_pc_transformed[:, 0] <= workspace_bounds[0][1]) &
-                        (d405_pc_transformed[:, 1] >= workspace_bounds[1][0]) & 
-                        (d405_pc_transformed[:, 1] <= workspace_bounds[1][1]) &
-                        (d405_pc_transformed[:, 2] >= workspace_bounds[2][0]) & 
-                        (d405_pc_transformed[:, 2] <= workspace_bounds[2][1])
-                    )
-                    d405_pc_processed = d405_pc_transformed[mask]
+                        # Manually crop D405 points
+                        mask = (
+                            (d405_pc_transformed[:, 0] >= workspace_bounds[0][0]) & 
+                            (d405_pc_transformed[:, 0] <= workspace_bounds[0][1]) &
+                            (d405_pc_transformed[:, 1] >= workspace_bounds[1][0]) & 
+                            (d405_pc_transformed[:, 1] <= workspace_bounds[1][1]) &
+                            (d405_pc_transformed[:, 2] >= workspace_bounds[2][0]) & 
+                            (d405_pc_transformed[:, 2] <= workspace_bounds[2][1])
+                        )
+                        d405_pc_processed = d405_pc_transformed[mask]
 
                     # Orbbec PCD
                     pcd_orbbec = o3d.geometry.PointCloud()
                     pcd_orbbec.points = o3d.utility.Vector3dVector(main_pc_processed[:,:3])
                     pcd_orbbec.colors = o3d.utility.Vector3dVector(main_pc_processed[:,3:6])
 
-                    # D405 PCD (color it blue)
-                    pcd_d405 = o3d.geometry.PointCloud()
-                    pcd_d405.points = o3d.utility.Vector3dVector(d405_pc_processed[:,:3])
-                    pcd_d405.colors = o3d.utility.Vector3dVector(d405_pc_processed[:,3:6])
+                    if include_d405:
+                        # D405 PCD (color it blue)
+                        pcd_d405 = o3d.geometry.PointCloud()
+                        pcd_d405.points = o3d.utility.Vector3dVector(d405_pc_processed[:,:3])
+                        pcd_d405.colors = o3d.utility.Vector3dVector(d405_pc_processed[:,3:6])
 
                     # Combine and update
                     pcd.points = pcd_orbbec.points
                     pcd.colors = pcd_orbbec.colors
-                    pcd.points.extend(pcd_d405.points)
-                    pcd.colors.extend(pcd_d405.colors)
+                    if include_d405:
+                        pcd.points.extend(pcd_d405.points)
+                        pcd.colors.extend(pcd_d405.colors)
 
                     if first:
                         vis.add_geometry(pcd)
@@ -262,12 +268,13 @@ def main(output, visual, init_joints, frequency, command_latency):
                     recorded_actions=[action_to_record])
                 precise_wait(t_cycle_end)
                 iter_idx += 1
-            duration = duration[1:]
-            print(f"""[demo_real_piper]
-                    cnt: {len(duration)} ea
-                    mean: {duration.mean():.4f} ms
-                    max: {duration.max():.4f} ms
-                    min: {duration.min():.4f} ms""")
+            if duration.size > 1:
+                duration = duration[1:]
+                print(f"""[demo_real_piper]
+                        cnt: {len(duration)} ea
+                        mean: {duration.mean():.4f} ms
+                        max: {duration.max():.4f} ms
+                        min: {duration.min():.4f} ms""")
 
 # %%
 if __name__ == '__main__':

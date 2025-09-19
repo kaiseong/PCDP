@@ -9,15 +9,6 @@ import pyrealsense2 as rs
 from pcdp.shared_memory.shared_ndarray import SharedNDArray
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 
-# debug
-import csv
-def save_timestamp_duration_to_csv(timestamps, filename):
-    """타임스탬프 배열을 CSV 파일로 저장"""
-    with open(filename, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['index', 'timestamp'])
-        for i, ts in enumerate(timestamps):
-            writer.writerow([i, ts])
 
 def rs_points_to_array(points: rs.points,
                        color_frame: rs.video_frame,
@@ -232,7 +223,7 @@ class SingleRealSense(mp.Process):
         try:
             depth_sensor = profile.get_device().first_depth_sensor()
             if depth_sensor.supports(rs.option.visual_preset):
-                depth_sensor.set_option(rs.option.visual_preset, 4.0)
+                depth_sensor.set_option(rs.option.visual_preset, 5.0)
         except Exception:
             cprint(f"[SingleRealSense] visual_preset not supported: {e}", "yellow", attrs=["bold"])
             pass
@@ -288,7 +279,7 @@ class SingleRealSense(mp.Process):
                 pc.map_to(color)
                 points= pc.calculate(depth)
                 point_cloud = rs_points_to_array(points, color,
-                                        min_z=0.07, max_z=0.50, bilinear=True)
+                                        min_z=0.04, max_z=0.50, bilinear=True)
                 
                 num_valid_points = point_cloud.shape[0]
                 if num_valid_points > self.num_downsample:
@@ -357,7 +348,7 @@ class SingleRealSense(mp.Process):
         finally:
             pipeline.stop()
             # self.ready_event.set()
-            cprint(f"anormaly_cnt: {anormaly_cnt}", "red", attrs=["bold"])
+            cprint(f"[Realsense] anormaly_cnt: {anormaly_cnt}", "red", attrs=["bold"])
             if self.verbose:
                 cprint("[SingleRealSense] Main loop ended, resources cleaned up.", "red", attrs=["bold"])
 

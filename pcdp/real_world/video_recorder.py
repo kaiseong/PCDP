@@ -35,8 +35,12 @@ class VideoRecorder(mp.Process):
         self.is_recording = False
         
         self.frame_index = 0
+        self.n_frames_recorded = 0
         self.last_processed_timestamp = -1.0
+        self.last_capture_timestamp = None # 이전 프레임의 하드웨어 타임스탬프
         self.recording_start_time = None
+        self.timestamp_buffer = []
+        self.csv_path = None
 
     
     def start_episode_recording(self, video_path: str, start_time: float = None):
@@ -81,12 +85,24 @@ class VideoRecorder(mp.Process):
                             if current_timestamp > self.last_processed_timestamp:
                                 self.last_processed_timestamp = current_timestamp
 
+                                # 타임스탬프 수집 및 경고 출력 로직
+                                capture_timestamp = frame_data.get('camera_capture_timestamp')
+                                if capture_timestamp is not None:
+                                    self.timestamp_buffer.append(capture_timestamp)
+                                    if self.last_capture_timestamp is not None:
+                                        time_delta = capture_timestamp - self.last_capture_timestamp
+                                        # 50ms 이상 차이날 경우 경고 출력 (타임스탬프가 초 단위라고 가정)
+                                        if time_delta > 0.05:
+                                            cprint(f"[{self.name}] Frame drop detected! Gap: {time_delta * 1000:.2f} ms", "red", attrs=["bold"])
+                                    self.last_capture_timestamp = capture_timestamp
+
                                 rgb_frame = frame_data['image']
                                 video_frame = av.VideoFrame.from_ndarray(rgb_frame, format='rgb24')
                                 video_frame.pts = self.frame_index
                                 for packet in self.stream.encode(video_frame):
                                     self.container.mux(packet)
                                 self.frame_index += 1
+                                self.n_frames_recorded += 1
                     except queue.Empty:
                         time.sleep(0.001)
                     except Exception as e:
@@ -116,8 +132,12 @@ class VideoRecorder(mp.Process):
             self.stream.height = image_spec.shape[0]
             self.stream.pix_fmt = self.pixel_format
             self.frame_index = 0
+            self.n_frames_recorded = 0
+            self.last_capture_timestamp = None # 리셋
             self.recording_start_time = start_time
             self.is_recording=True
+            self.timestamp_buffer.clear()
+            self.csv_path = pathlib.Path(video_path).with_suffix('.csv')
         except Exception as e:
             cprint(f"[{self.name}] Failed to start recording: {e}", "red", attrs=["bold"])
             self.container = None
@@ -129,14 +149,62 @@ class VideoRecorder(mp.Process):
             return
 
         try:
+            # Drain any lingering frames in the queue before closing
+            drain_start_time = mono_time.now_s()
+            while (mono_time.now_s() - drain_start_time) < 0.1: # Drain for up to 100ms
+                try:
+                    frame_data = self.rgb_queue.get_nowait()
+                    current_timestamp = frame_data.get('timestamp', -1.0)
+                    if current_timestamp >= self.recording_start_time and current_timestamp > self.last_processed_timestamp:
+                        self.last_processed_timestamp = current_timestamp
+
+                        # 타임스탬프 수집 및 경고 출력 로직 (Final flush에서도 동일하게 수행)
+                        capture_timestamp = frame_data.get('camera_capture_timestamp')
+                        if capture_timestamp is not None:
+                            self.timestamp_buffer.append(capture_timestamp)
+                            if self.last_capture_timestamp is not None:
+                                time_delta = capture_timestamp - self.last_capture_timestamp
+                                if time_delta > 0.05:
+                                    cprint(f"[{self.name}] Frame drop detected! Gap: {time_delta * 1000:.2f} ms", "red", attrs=["bold"])
+                            self.last_capture_timestamp = capture_timestamp
+
+                        rgb_frame = frame_data['image']
+                        video_frame = av.VideoFrame.from_ndarray(rgb_frame, format='rgb24')
+                        video_frame.pts = self.frame_index
+                        for packet in self.stream.encode(video_frame):
+                            self.container.mux(packet)
+                        self.frame_index += 1
+                        self.n_frames_recorded += 1
+                except queue.Empty:
+                    break
+                except Exception:
+                    break
+
             cprint(f"[{self.name}] Closing video container", "white", attrs=["bold"])
             for packet in self.stream.encode():
                 self.container.mux(packet)
             
             self.container.close()
+            cprint(f"[{self.name}] Episode finalized with {self.n_frames_recorded} video frames", "cyan", attrs=["bold"])
+
+            # CSV 파일 저장
+            if self.csv_path and self.timestamp_buffer:
+                try:
+                    np.savetxt(
+                        self.csv_path,
+                        np.array(self.timestamp_buffer),
+                        delimiter=',',
+                        header='camera_capture_timestamp',
+                        fmt='%.6f'
+                    )
+                    cprint(f"[{self.name}] Saved {len(self.timestamp_buffer)} timestamps to {self.csv_path}", "green", attrs=["bold"])
+                except Exception as e:
+                    cprint(f"[{self.name}] Failed to save timestamps CSV: {e}", "red", attrs=["bold"])
+
         except Exception as e:
             cprint(f"[{self.name}] Error closing video container: {e}", "red", attrs=["bold"])
         finally:
             self.container=None
             self.stream=None
             self.is_recording=False
+            self.csv_path = None
