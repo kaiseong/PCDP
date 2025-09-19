@@ -510,7 +510,7 @@ class Recorder(mp.Process):
 
             # Base observation data
             obs_data={
-                'main_pointcloud': orbbec_data['pointcloud'],
+                'pointcloud': orbbec_data['pointcloud'],
                 'robot_eef_pose': robot_data['robot_eef_pose'],
                 'robot_joint': robot_data['robot_joint'],
                 'robot_gripper': robot_data['robot_gripper'],

@@ -40,9 +40,6 @@ class PCDPPolicy(BasePointCloudPolicy):
         # Move normalizer to the same device as input tensors
         if self.normalizer is not None and self.normalizer.device != cloud.device:
             self.normalizer.to(cloud.device)
-        print(f"actions[0]: {actions[0]}")
-        print(f"robot_obs[0]: {robot_obs[0]}")
-        print(f"cloud[0]: {cloud.F[0]}")
 
         # Normalize inputs if normalizer is set
         if self.normalizer is not None:
@@ -79,12 +76,14 @@ class PCDPPolicy(BasePointCloudPolicy):
 
         src, pos, src_padding_mask = self.sparse_encoder(cloud, batch_size = batch_size)
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1]
-        
+        print(f"readout: {readout.shape}")
+        print(f"robot_obs: {robot_obs.shape}")
         if robot_obs.dim() == 2:
             robot_obs = robot_obs.unsqueeze(1)
         combine_readout=torch.cat([readout, robot_obs], dim =-1)  
-
+        
         readout = combine_readout[:, 0]
+        print(f"after_readout: {readout.shape}")
         if actions is not None:
             # training mode
             loss = self.action_decoder.compute_loss(readout, actions)

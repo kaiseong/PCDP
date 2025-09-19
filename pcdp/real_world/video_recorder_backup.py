@@ -38,6 +38,8 @@ class VideoRecorder(mp.Process):
         self.n_frames_recorded = 0  # 녹화된 프레임 수를 위한 카운터
         self.last_processed_timestamp = -1.0
         self.recording_start_time = None
+        self.last_frame_time=0
+        self.check_drop = False
 
     
     def start_episode_recording(self, video_path: str, start_time: float = None):
@@ -82,6 +84,14 @@ class VideoRecorder(mp.Process):
                             if current_timestamp > self.last_processed_timestamp:
                                 self.last_processed_timestamp = current_timestamp
 
+                                capture_timestamp = frame_data.get('camera_capture_timestamp')
+                                if self.check_drop:
+                                    time_delta = capture_timestamp-self.last_frame_time
+                                    if time_delta > 50:
+                                        cprint(f"[{self.name}] Frame drop detected! Gap: {time_delta:.2f} ms", "red", attrs=["bold"])
+                                self.last_frame_time = capture_timestamp
+                                    
+                                
                                 rgb_frame = frame_data['image']
                                 video_frame = av.VideoFrame.from_ndarray(rgb_frame, format='rgb24')
                                 video_frame.pts = self.frame_index
@@ -89,10 +99,12 @@ class VideoRecorder(mp.Process):
                                     self.container.mux(packet)
                                 self.frame_index += 1
                                 self.n_frames_recorded += 1 # 프레임 카운터 증가
+                                self.check_drop = True
                     except queue.Empty:
                         time.sleep(0.001)
                     except Exception as e:
                         cprint(f"[{thread_name}] Error processing frame: {e}", "red", attrs=["bold"])
+                    
                 else:
                     time.sleep(0.001)
                 elapsed = mono_time.now_s() - start_time
@@ -121,6 +133,7 @@ class VideoRecorder(mp.Process):
             self.n_frames_recorded = 0 # 카운터 리셋
             self.recording_start_time = start_time
             self.is_recording=True
+            self.check_drop = False
         except Exception as e:
             cprint(f"[{self.name}] Failed to start recording: {e}", "red", attrs=["bold"])
             self.container = None
