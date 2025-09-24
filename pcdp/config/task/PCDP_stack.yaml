@@ -3,7 +3,7 @@ name: PCDP_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/test2/recorder_data
+dataset_path: data/last_dance/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -14,6 +14,10 @@ shape_meta: &shape_meta
     robot_obs:
       shape: [7]  # 6DOF + gripper_width
       type: low_dim
+    occlusion:
+      shape: [1]
+      type: low_dim
+
   action: 
     shape: [7]  # 6DOF + gripper_toggle
 

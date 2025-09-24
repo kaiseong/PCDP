@@ -66,12 +66,15 @@ training:
   debug: False
   resume: True
   num_epochs: 1500
-  use_ema: False
+  use_ema: True
   rollout_every: 5
   save_epochs: 20
   tqdm_interval_sec: 1.0
   validation_every: 5
-
+  # new
+  contrastive_lambda_max: 0.5
+  contrastive_warmup_steps: 100
+  
 logging:
   group: ${exp_name}
   id: null

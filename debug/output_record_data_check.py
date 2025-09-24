@@ -88,7 +88,7 @@ def point_cloud_visualize(obs_episode):
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
                                         enable_filter=True)
-    pts_seq = obs_episode['main_pointcloud']
+    pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
         return
@@ -145,14 +145,13 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     
     obs_align_timestamp = obs_episode['align_timestamp']
     action = action_episode['action']
-    
     output_filename_prefix = f"{episode_name}_output"
 
     with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'orbbec_capture_timestamp' ])
+        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'orbbec_capture_timestamp', 'occlusion' ])
         for i, ts in enumerate(obs_align_timestamp):
-            writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i] ])
+            writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['occlusion'][i] ])
 
     # with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
     #     writer = csv.writer(csvfile)
@@ -169,6 +168,6 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    analyzer = EpisodeAnalyzer("/home/moai/pcdp/test2/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0003')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0003')
+    analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/last_dance/recorder_data")
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0002')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0002')

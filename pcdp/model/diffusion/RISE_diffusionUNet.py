@@ -143,23 +143,26 @@ class DiffusionUNetPolicy(nn.Module):
         return action_pred
 
     # ========= training  ============
-    def compute_loss(self, readout, actions):
-        batch_size = readout.shape[0]
+    def compute_loss(self, readout, actions, return_aux: bool=False):
+        B = readout.shape[0]
+        T = self.horizon
+        To = self.n_obs_steps
+
 
         # handle different ways of passing observation
         local_cond = None
         global_cond = None
-        trajectory = actions
+        trajectory = actions        
         cond_data = trajectory
-        assert readout.shape[0] == batch_size * self.n_obs_steps
+        assert readout.shape[0] == B * To
         # reshape back to B, Do
-        global_cond = readout.reshape(batch_size, -1) # (B, T*C)
+        global_cond = readout.reshape(B, -1) # (B, T*C)
 
         # generate impainting mask
         condition_mask = self.mask_generator(trajectory.shape)
 
         # Sample noise that we'll add to the images
-        noise = torch.randn(trajectory.shape, device=trajectory.device)
+        noise = torch.randn(trajectory.shape, device=trajectory.device, dtype = trajectory.dtype)
         bsz = trajectory.shape[0]
         # Sample a random timestep for each image
         timesteps = torch.randint(
@@ -193,4 +196,11 @@ class DiffusionUNetPolicy(nn.Module):
         loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
+        if return_aux:
+            aux = {
+                'xt_last' : noisy_trajectory[:, -1, :].detach(), # [B, Da]
+                'xt': noisy_trajectory.detach(),
+                't': timesteps.detach()
+            }
+            return loss, aux
         return loss

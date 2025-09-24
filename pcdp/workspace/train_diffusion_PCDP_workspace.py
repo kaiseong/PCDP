@@ -104,6 +104,7 @@ class TrainPCDPWorkspace(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.set_normalizer(normalizer)
 
+
         dataloader = DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
 
         val_dataset = dataset.get_validation_dataset()
@@ -150,6 +151,13 @@ class TrainPCDPWorkspace(BaseWorkspace):
 
         start_epoch = self.epoch
         self.model.train()
+        lambda_max = getattr(cfg.training, "contrastive_lambda_max", 0.5)
+        lambda_warmup_steps = getattr(
+            cfg.training, "contrastive_warmup_steps",
+            len(dataloader) * 3 # 3epochs default
+        )
+
+
         for epoch in range(start_epoch, cfg.training.num_epochs):
             self.epoch = epoch
             
@@ -162,11 +170,22 @@ class TrainPCDPWorkspace(BaseWorkspace):
                 cloud_feats = data['input_feats_list'].to(device)
                 action_data = data['action'].to(device)
                 robot_obs = data['robot_obs'].to(device)
+                occlusion = data['occlusion'].to(device)
                 
+                lam = float(lambda_max * min(1.0, self.global_step/max(1, lambda_warmup_steps)))
+                self.model.set_contrastive_weight(lam)
+
                 # forward
                 cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
-                loss = self.model(cloud_data, action_data, robot_obs, batch_size=action_data.shape[0])
+                out = self.model(
+                    cloud_data, action_data, robot_obs, occlusion, 
+                    batch_size=action_data.shape[0], return_logs=True)
                 
+                if isinstance(out, tuple):
+                    loss, logs = out
+                else:
+                    loss, logs = out, {}
+
                 # backward
                 loss.backward()
                 self.optimizer.step()
@@ -180,10 +199,23 @@ class TrainPCDPWorkspace(BaseWorkspace):
                 loss_val = loss.item()
                 avg_loss_epoch += loss_val
                 pbar.set_postfix(loss=f"{loss_val:.4f}")
-                wandb_run.log({
+
+                log_payload = {
                     'train_loss_step': loss_val,
-                    'lr': lr_scheduler.get_last_lr()[0]
-                }, step=self.global_step)
+                    'lr': lr_scheduler.get_last_lr()[0],
+                    'lambda': lam,
+                }
+                if isinstance(logs, dict):
+                    for k_src, k_dst in [
+                        ('L_diff', 'train/L_diff'),
+                        ('L_cl', 'train/L_cl'),
+                        ('vis_mean', 'train/vis_mean'),
+                        ('q*k', 'train/cos_qk'),
+                    ]:
+                        if k_src in logs and hasattr(logs[k_src], "detach"):
+                            log_payload[k_dst] = float(logs[k_src].detach().cpu())
+                wandb_run.log(log_payload, step = self.global_step)
+
                 self.global_step += 1
 
             avg_loss_epoch /= len(dataloader)
@@ -213,7 +245,9 @@ class TrainPCDPWorkspace(BaseWorkspace):
             # run rollout
             if (self.epoch + 1) % cfg.training.rollout_every == 0:
                 policy_for_rollout = self.ema_model if cfg.training.use_ema else self.model
+                policy_for_rollout.eval()
                 runner_log = env_runner.run(policy_for_rollout)
+                self.model.train()
                 epoch_log.update(runner_log)
 
             wandb_run.log(epoch_log, step=self.global_step)
@@ -224,16 +258,6 @@ class TrainPCDPWorkspace(BaseWorkspace):
                 self.save_checkpoint(path=ckpt_path)
                 self.save_checkpoint()
                 
-                # plot history
-                plt.figure()
-                plt.plot(range(len(train_history)), train_history, label='Train Loss')
-                plt.tight_layout()
-                plt.legend()
-                plt.title("Training Loss History")
-                plt.xlabel("Epoch")
-                plt.ylabel("Loss")
-                plt.savefig(os.path.join(self.output_dir, f'train_history_seed_{cfg.training.seed}.png'))
-                plt.close()
                 np.save(os.path.join(self.output_dir, 'train_history.npy'), np.array(train_history))
 
         # save final model

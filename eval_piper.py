@@ -39,6 +39,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 import numpy as np
 from pcdp.common import RISE_transformation as rise_tf
 
+
 def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
     
     base_to_robot_matrix = np.linalg.inv(robot_to_base_matrix)
@@ -56,36 +57,10 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
         original_pose_6d = rise_tf.mat_to_xyz_rot(
             original_matrix,
             rotation_rep='euler_angles',
-            rotation_rep_convention='XYZ'
+            rotation_rep_convention='ZYX'
         )
         original_poses.append(original_pose_6d)
-    return original_poses
-
-
-def _unnormalize_action(action_10d):
-    """
-    주어진 6D 회전 표현 액션을 역정규화합니다.
-    action_6d: (N, 10) 크기의 배열 - [x, y, z, rot_6d(6), gripper(1)]
-    """
-    # TRANS_MIN/MAX는 (3,) 크기이므로 앞 3개 요소에만 적용
-    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_10d.device).float()
-    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_10d.device).float()
-    
-    # 위치 역정규화: [-1, 1] -> [min, max]
-    action_10d[..., :3] = (action_10d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
-    
-    # 그리퍼 역정규화: [-1, 1] -> [0, 1] (0: closed, 1: open)
-    # RISE의 그리퍼 값은 너비가 아닌 상태를 나타내므로 여기서는 0과 1 사이로 매핑
-    action_10d[..., -1] = (action_10d[..., -1] + 1) / 2.0 
-    return action_10d
-
-def obs_normalize_(tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
-    tcp_list[:3] = (tcp_list[:3] - trans_min) / (trans_max - trans_min) * 2 - 1
-    tcp_list[-1] = (tcp_list[-1] - grip_min ) / (grip_max - grip_min) *2 -1
-
-    return tcp_list
-
-
+    return np.array(original_poses, dtype=np.float32)
 
 
 @click.command()
@@ -101,7 +76,15 @@ def main(input, output, match_episode, frequency):
 
     # 정책 모델 초기화 및 가중치 로드
     policy: PCDPPolicy = hydra.utils.instantiate(cfg.policy)
-    policy.load_state_dict(payload['state_dicts']['model'])
+    
+    # EMA 가중치가 있으면 사용하고, 없으면 일반 모델 가중치를 사용
+    state_dict = payload['state_dicts']['model']
+    if 'ema_model' in payload['state_dicts']:
+        state_dict = payload['state_dicts']['ema_model']
+        cprint("Loading EMA model weights for evaluation.", "green")
+    else:
+        cprint("Loading non-EMA model weights for evaluation.", "yellow")
+    policy.load_state_dict(state_dict)
     
     device = torch.device(cfg.training.device)
     policy.to(device).eval()
@@ -141,7 +124,6 @@ def main(input, output, match_episode, frequency):
             env.exec_actions([target_pose], [plan_time])
             time.sleep(2.0)
             
-            # ... (main 함수 내부) ...
             t_start = mono_time.now_s()
             iter_idx = 0
             is_evaluating = False
@@ -168,74 +150,64 @@ def main(input, output, match_episode, frequency):
                             cprint("Evaluation stopped. Human in control.", "yellow")
 
                 if is_evaluating:
-                    # ===== 정책 기반 제어 (Policy Control) =====
                     with torch.no_grad():
-                        # 1. 관측 데이터 전처리 (수정됨)
-                        # 가장 마지막 관측 프레임 하나만 사용
+                        # 1. 관측 데이터 전처리 (학습 파이프라인과 일치시킴)
                         pc_raw = obs['pointcloud'][-1]
-                        # Explicitly cast to float64 to prevent potential dtype issues
                         pose_raw = obs['robot_eef_pose'][-1].astype(np.float64)
-                        grip_raw = obs['robot_gripper'][-1,:1].astype(np.float64)
-                        robot_obs_raw = np.concatenate([pose_raw, grip_raw], axis=-1)
+                        grip_raw = obs['robot_gripper'][-1].flatten().astype(np.float64)
+                        robot_obs_raw_7d = np.concatenate([pose_raw, grip_raw])
 
-                        # TF_process expects a batch of poses (N, 7). Reshape (7,) to (1, 7).
-                        robot_obs_raw_batched = np.expand_dims(robot_obs_raw, axis=0)
-                        robot_obs_euler_tf_batched = low_preprocessor.TF_process(robot_obs_raw_batched)
+                        # 로봇 관측값 좌표계 변환 (학습 데이터와 동일하게)
+                        transformed_obs_7d = low_preprocessor.TF_process(robot_obs_raw_7d[np.newaxis, :]).squeeze(0)
                         
-                        # The result is also batched, so squeeze it back to a single pose.
-                        robot_obs_euler_tf = robot_obs_euler_tf_batched.squeeze(0)
+                        # Policy 입력을 위해 10D 텐서로 변환
+                        obs_pose_euler = transformed_obs_7d[:6]
+                        obs_gripper = transformed_obs_7d[6:]
+                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX')
+                        obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
+                        robot_obs_tensor = torch.from_numpy(obs_10d).to(device).float().unsqueeze(0)
 
-                        obs_pose_euler = robot_obs_euler_tf[:6]
-                        obs_gripper = robot_obs_euler_tf[6:]
-                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX').squeeze()
-                        obs_10d = np.concatenate([obs_9d, obs_gripper])
-                    
-                        robot_obs_normalized = obs_normalize_(obs_10d, OBS_TRANS_MAX, OBS_TRANS_MIN, OBS_GRIP_MAX, OBS_GRIP_MIN)
-                        robot_obs_tensor = torch.from_numpy(robot_obs_normalized).to(device).float().reshape(1,1,-1)
-                        
-
-                        # 좌표 변환, 작업 공간 필터링 등 (config 기반)
-                        pc = pc_preprocessor(pc_raw)
-
-                        # Voxelize
+                        # 포인트클라우드 전처리
+                        pc = pc_preprocessor.process(pc_raw)
                         coords = np.ascontiguousarray(pc[:, :3] / voxel_size, dtype=np.int32)
                         feats = pc.astype(np.float32)
-
-                        # MinkowskiEngine SparseTensor 생성 (단일 프레임)
                         coords_batch, feats_batch = ME.utils.sparse_collate([coords], [feats])
-                        coords_batch = coords_batch.to(device)
-                        feats_batch = feats_batch.to(device)
-                        cloud_data = ME.SparseTensor(feats_batch, coords_batch)
+                        cloud_data = ME.SparseTensor(
+                            features=feats_batch, 
+                            coordinates=coords_batch,
+                            device=device)
                         
-                        t1= mono_time.now_ms()
+                        t1 = mono_time.now_ms()
                         
-
-                        pred_action_10d_normalized = policy(cloud_data, obs=robot_obs_tensor, batch_size=1).cpu()
+                        # 2. 액션 추론 (Policy가 Normalizer 상태까지 포함)
+                        pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1).cpu()
+                        
                         print(f"inference: {mono_time.now_ms() - t1}")
-
                         print(f"loop time: {mono_time.now_ms() - t2}")
-                        t2= mono_time.now_ms()
-                        # 2. 액션 추론
-                        pred = _unnormalize_action(pred_action_10d_normalized.squeeze(0))
-                        if pred.ndim == 1:
-                            pred = pred.unsqueeze(0)
+                        t2 = mono_time.now_ms()
+
+                        # 3. 액션 후처리
+                        pred = pred_action_10d
+                        if pred.ndim == 3:
+                            pred = pred.squeeze(0)
 
                         pos   = pred[:, :3].cpu().numpy()
                         rot6d = pred[:, 3:9].cpu().numpy()
-                        grip = (pred[:, 9:].cpu().numpy() >= 0.8).astype(int)
+                        grip = (pred[:, 9:].cpu().numpy() >= 0.5).astype(np.int32)
+                        xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
 
-                        xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)  # (N, 9)
-
-                        # (xyz + rot6d) → (xyz + euler)
-                        xyz_euler = xyz_rot_transform(
+                        # 6D 회전 표현을 오일러 각도로 변환
+                        xyz_euler_base_frame = xyz_rot_transform(
                             xyz_rot6d,
                             from_rep="rotation_6d",
                             to_rep="euler_angles",
-                            to_convention="XYZ"
+                            to_convention="ZYX"
                         )
-
-                        TF_xyz_euler = revert_action_transformation(xyz_euler, robot_to_base)
-                        action_sequence_7d = np.concatenate([TF_xyz_euler, grip], axis=-1)
+                        
+                        # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
+                        xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
+                        
+                        action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
                         
                         # 4. 로봇 제어
                         now = mono_time.now_s()

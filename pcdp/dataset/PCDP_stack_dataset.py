@@ -99,6 +99,8 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         if n_obs_steps is not None:
             for key in pointcloud_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
+        
+        key_first_k['occlusion'] = horizon + n_latency_steps
 
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes, 
@@ -189,7 +191,6 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
 
         T_slice = slice(self.n_obs_steps)
         obs_dict = {key: data[key][T_slice] for key in self.pointcloud_keys + self.lowdim_keys}
-        
         clouds = [obs_dict['pointcloud'][i].astype(np.float32) for i in range(self.n_obs_steps)]
         robot_obs_euler = np.array([obs_dict['robot_obs'][i] for i in range(self.n_obs_steps)], dtype=np.float32)
         
@@ -220,7 +221,8 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
             'robot_obs': torch.from_numpy(robot_obs_10d).float(),
-            'action': torch.from_numpy(actions_10d).float()
+            'action': torch.from_numpy(actions_10d).float(),
+            'occlusion': torch.from_numpy(data['occlusion']).float(),
         }
 
 def collate_fn(batch):
