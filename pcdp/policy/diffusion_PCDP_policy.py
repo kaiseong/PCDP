@@ -59,7 +59,8 @@ class PCDPPolicy(BasePointCloudPolicy):
         self.contrastive_tau = 0.07
         self.contrastive_wmin = 0.2
         self.contrastive_gamma = 1.0
-        self._contrastive_weight = 0.1
+        self._contrastive_weight = 0.0
+        self.occl_scale = 150.0
 
 
 
@@ -147,6 +148,7 @@ class PCDPPolicy(BasePointCloudPolicy):
                 vis = None
             else:
                 vis = occlusion
+                vis = (vis * self.occl_scale).clamp(0.0, 1.0)
                 if vis.dim() == 3: # [B, H, 1] -> [B, H]
                     vis = vis[:, :, 0]
                 elif vis.dim() == 1: # [B] -> [B, H]
@@ -169,7 +171,7 @@ class PCDPPolicy(BasePointCloudPolicy):
                 alpha = alpha / (alpha.sum(dim=1, keepdim=True) + 1e-12)      
                 k = (alpha.unsqueeze(-1)*K).sum(dim=1)
                 k = F.normalize(k, dim=-1)
-
+            breakpoint()
             if vis is None:
                 w = torch.ones(q.size(0), device=q.device)
             else:

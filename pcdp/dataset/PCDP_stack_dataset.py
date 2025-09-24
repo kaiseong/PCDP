@@ -12,6 +12,7 @@ import hashlib
 import copy
 import MinkowskiEngine as ME
 import collections.abc as container_abcs
+import torch.nn as nn
 
 from pcdp.common.pytorch_util import dict_apply
 from pcdp.dataset.base_dataset import BasePointCloudDataset
@@ -135,6 +136,10 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         self.voxel_size = voxel_size
         self.n_latency_steps = n_latency_steps
         self.normalizer = None
+        self.translation_norm_config = None
+
+    def set_translation_norm_config(self, config):
+        self.translation_norm_config = config
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -154,16 +159,52 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
 
     def get_normalizer(self, device='cpu') -> LinearNormalizer:
         normalizer = LinearNormalizer()
-        
-        all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+
+        if self.translation_norm_config is not None:
+            # Use pre-defined min/max for translation
+            translation_config = np.array(self.translation_norm_config)
+            t_min = torch.from_numpy(translation_config[:, 0]).to(dtype=torch.float32, device=device)
+            t_max = torch.from_numpy(translation_config[:, 1]).to(dtype=torch.float32, device=device)
+
+            # Create normalizer from min/max
+            # Logic from _fit function in normalizer.py
+            output_max = 1.0
+            output_min = -1.0
+            range_eps = 1e-4
+            
+            input_range = t_max - t_min
+            input_range[input_range < range_eps] = output_max - output_min
+            scale = (output_max - output_min) / input_range
+            offset = output_min - scale * t_min
+            
+            # Create ParameterDict for the normalizer
+            params_dict = nn.ParameterDict({
+                'scale': scale,
+                'offset': offset,
+                'input_stats': nn.ParameterDict({
+                    'min': t_min, 'max': t_max,
+                    'mean': torch.zeros_like(t_min), 'std': torch.ones_like(t_min)
+                })
+            })
+            for p in params_dict.parameters():
+                p.requires_grad_(False)
+
+            # Apply the same normalizer to both obs and action translation
+            translation_normalizer = SingleFieldLinearNormalizer(params_dict)
+            normalizer['action_translation'] = translation_normalizer
+            normalizer['obs_translation'] = translation_normalizer
+        else:
+            # Fallback to data-driven normalization for translation
+            all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+            all_robot_obs = torch.from_numpy(self.replay_buffer['robot_obs'][:]).to(device)
+            action_trans_data = all_actions[:, :3]
+            obs_trans_data = all_robot_obs[:, :3]
+            normalizer['action_translation'] = SingleFieldLinearNormalizer.create_fit(action_trans_data)
+            normalizer['obs_translation'] = SingleFieldLinearNormalizer.create_fit(obs_trans_data)
+
+        # Gripper and color normalization remains data-driven
         all_robot_obs = torch.from_numpy(self.replay_buffer['robot_obs'][:]).to(device)
-
-        action_trans_data = all_actions[:, :3]
-        obs_trans_data = all_robot_obs[:, :3]
         obs_grip_data = all_robot_obs[:, 6:7]
-
-        normalizer['action_translation'] = SingleFieldLinearNormalizer.create_fit(action_trans_data)
-        normalizer['obs_translation'] = SingleFieldLinearNormalizer.create_fit(obs_trans_data)
         normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
 
         all_colors = []

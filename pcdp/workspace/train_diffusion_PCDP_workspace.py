@@ -99,6 +99,8 @@ class TrainPCDPWorkspace(BaseWorkspace):
         assert isinstance(dataset, BasePointCloudDataset)
 
         # create and set normalizer
+        if 'translation' in cfg.training:
+            dataset.set_translation_norm_config(cfg.training.translation)
         normalizer = dataset.get_normalizer(device=device)
         self.model.set_normalizer(normalizer)
         if self.ema_model is not None:

@@ -74,6 +74,11 @@ training:
   # new
   contrastive_lambda_max: 0.5
   contrastive_warmup_steps: 100
+  # normalization
+  translation:
+    - [-0.000, 0.715]    # X range (meters)
+    - [-0.000, 0.350]   # Y range (meters)  
+    - [-0.100, 0.400]    # Z range (meters)
   
 logging:
   group: ${exp_name}
