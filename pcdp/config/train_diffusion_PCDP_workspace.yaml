@@ -76,8 +76,8 @@ training:
   contrastive_warmup_steps: 100
   # normalization
   translation:
-    - [-0.000, 0.715]    # X range (meters)
-    - [-0.000, 0.350]   # Y range (meters)  
+    - [-0.040, 0.755]    # X range (meters)
+    - [-0.110, 0.640]   # Y range (meters)  
     - [-0.100, 0.400]    # Z range (meters)
   
 logging:

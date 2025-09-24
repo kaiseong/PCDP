@@ -171,7 +171,7 @@ class PCDPPolicy(BasePointCloudPolicy):
                 alpha = alpha / (alpha.sum(dim=1, keepdim=True) + 1e-12)      
                 k = (alpha.unsqueeze(-1)*K).sum(dim=1)
                 k = F.normalize(k, dim=-1)
-            breakpoint()
+
             if vis is None:
                 w = torch.ones(q.size(0), device=q.device)
             else:
