@@ -46,6 +46,7 @@ class TrainPCDPWorkspace(BaseWorkspace):
         # set seed
         seed = cfg.training.seed
         torch.manual_seed(seed)
+        np.random.seed(seed)
 
         # configure model
         self.model: PCDPPolicy = hydra.utils.instantiate(cfg.policy)
@@ -93,6 +94,8 @@ class TrainPCDPWorkspace(BaseWorkspace):
 
         # device
         device = torch.device(cfg.training.device)
+        self.model.to(device)
+        optimizer_to(self.optimizer, device)
 
         # dataset
         dataset: BasePointCloudDataset = hydra.utils.instantiate(cfg.task.dataset)
@@ -127,9 +130,6 @@ class TrainPCDPWorkspace(BaseWorkspace):
         )
         if cfg.training.resume and self.global_step > 0:
             lr_scheduler.last_epoch = self.global_step - 1
-        
-        self.model.to(device)
-        optimizer_to(self.optimizer, device)
 
         # ema
         ema: EMAModel = None
@@ -153,12 +153,13 @@ class TrainPCDPWorkspace(BaseWorkspace):
 
         start_epoch = self.epoch
         self.model.train()
+
+        # contrastive learning parameter
         lambda_max = getattr(cfg.training, "contrastive_lambda_max", 0.5)
         lambda_warmup_steps = getattr(
             cfg.training, "contrastive_warmup_steps",
             len(dataloader) * 3 # 3epochs default
         )
-
 
         for epoch in range(start_epoch, cfg.training.num_epochs):
             self.epoch = epoch

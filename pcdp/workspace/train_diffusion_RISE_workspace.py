@@ -69,11 +69,6 @@ class TrainRISEWorkspace(BaseWorkspace):
     def run(self):
         cfg = copy.deepcopy(self.cfg)
 
-        # device
-        device = torch.device(cfg.training.device)
-        self.model.to(device)
-        optimizer_to(self.optimizer, device)
-
         # resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
@@ -81,13 +76,29 @@ class TrainRISEWorkspace(BaseWorkspace):
                 cprint(f"Resuming from checkpoint {lastest_ckpt_path}", "blue", attrs=["bold"])
                 self.load_checkpoint(path=lastest_ckpt_path)
 
+        # device
+        device = torch.device(cfg.training.device)
+        self.model.to(device)
+        optimizer_to(self.optimizer, device)
+
         # dataset
         dataset: BasePointCloudDataset = hydra.utils.instantiate(cfg.task.dataset)
         assert isinstance(dataset, BasePointCloudDataset)
+        
+        # create and set normalizer
+        if 'translation' in cfg.training:
+            dataset.set_translation_norm_config(cfg.training.translation)
+        normalizer = dataset.get_normalizer(device=device)
+        self.model.set_normalizer(normalizer)
+        if self.ema_model is not None:
+            self.ema_model.set_normalizer(normalizer)
+
         dataloader = DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
 
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, collate_fn=collate_fn, **cfg.val_dataloader)
+        if val_dataset is not None and len(val_dataset) > 0:
+            val_dataset.normalizer = normalizer
 
         # env runner
         env_runner: BasePointCloudRunner = hydra.utils.instantiate(
@@ -125,6 +136,7 @@ class TrainRISEWorkspace(BaseWorkspace):
 
         start_epoch = self.epoch
         self.model.train()
+
         for epoch in range(start_epoch, cfg.training.num_epochs):
             self.epoch = epoch
             
@@ -135,7 +147,7 @@ class TrainRISEWorkspace(BaseWorkspace):
                 # data to device
                 cloud_coords = data['input_coords_list'].to(device)
                 cloud_feats = data['input_feats_list'].to(device)
-                action_data = data['action_normalized'].to(device)
+                action_data = data['action'].to(device)
                 
                 
                 # forward
@@ -187,7 +199,9 @@ class TrainRISEWorkspace(BaseWorkspace):
             # run rollout
             if (self.epoch + 1) % cfg.training.rollout_every == 0:
                 policy_for_rollout = self.ema_model if cfg.training.use_ema else self.model
+                policy_for_rollout.eval()
                 runner_log = env_runner.run(policy_for_rollout)
+                self.model.train()
                 epoch_log.update(runner_log)
 
             wandb_run.log(epoch_log, step=self.global_step)
@@ -198,16 +212,6 @@ class TrainRISEWorkspace(BaseWorkspace):
                 self.save_checkpoint(path=ckpt_path)
                 self.save_checkpoint()
                 
-                # plot history
-                plt.figure()
-                plt.plot(range(len(train_history)), train_history, label='Train Loss')
-                plt.tight_layout()
-                plt.legend()
-                plt.title("Training Loss History")
-                plt.xlabel("Epoch")
-                plt.ylabel("Loss")
-                plt.savefig(os.path.join(self.output_dir, f'train_history_seed_{cfg.training.seed}.png'))
-                plt.close()
                 np.save(os.path.join(self.output_dir, 'train_history.npy'), np.array(train_history))
 
         # save final model

@@ -11,18 +11,6 @@ shape_meta: &shape_meta
     pointcloud:
       shape: ${task.pointcloud_shape}
       type: pointcloud
-    robot_eef_pose:
-      shape: [6]  # 6DOF + gripper
-      type: low_dim
-    # robot_joint:
-    #   shape: [7]  # 7개 관절
-    #   type: low_dim
-    robot_gripper:
-      shape: [3]
-      type: low_dim
-    # align_timestamp:
-    #   shape: [1]
-    #   type: low_dim
   action: 
     shape: [7]  # 6DOF + gripper
 
@@ -34,8 +22,13 @@ dataset:
   _target_: pcdp.dataset.RISE_stack_pc_dataset.RISE_RealStackPointCloudDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
-  horizon: 20
-  n_obs_steps: 1
+  horizon: ${horizon}
+  n_obs_steps: ${dataset_obs_steps}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  n_latency_steps: ${n_latency_steps}
+
   use_cache: True
   voxel_size: 0.005
   seed: 233
@@ -69,13 +62,10 @@ dataset:
     
     # Workspace bounds [x_min, x_max], [y_min, y_max], [z_min, z_max]
     workspace_bounds:
-      - [-0.000, 0.740]    # X range (meters)
+      - [-0.000, 0.715]    # X range (meters)
       - [-0.400, 0.350]   # Y range (meters)  
       - [-0.100, 0.400]    # Z range (meters)
     
-    # normalize rgb values
-    rgb_mean: [0.1234, 0.1234, 0.1234]
-    rgb_std: [0.2620, 0.2710, 0.2709]
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:
     robot_to_base:

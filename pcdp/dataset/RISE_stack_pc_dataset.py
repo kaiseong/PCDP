@@ -13,6 +13,7 @@ import copy
 import MinkowskiEngine as ME
 import torchvision.transforms as T
 import collections.abc as container_abcs
+import torch.nn as nn
 
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.model.common.normalizer import LinearNormalizer
@@ -153,7 +154,11 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         self.voxel_size = voxel_size
         self.split = split
         self.n_latency_steps = n_latency_steps
-    
+
+
+    def set_translation_norm_config(self, config):
+        self.translation_norm_config = config
+
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler =SequenceSampler(
@@ -164,23 +169,80 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             episode_mask=self.val_mask
         )
         val_set.val_mask = self.val_mask
-        val_set.split = 'val'
+        val_set.normalizer = self.normalizer
         return val_set
-
-
-    def _normalize_tcp(self, tcp_list):
-        # Assuming tcp_list is (N, 9) for 6D rot or (N, 7) for euler+gripper
-        # This needs to be robust to the input shape.
-        tcp_list[:, :3] = (tcp_list[:, :3] - ACTION_TRANS_MIN) / (ACTION_TRANS_MAX - ACTION_TRANS_MIN) * 2 - 1
-        # Normalize gripper which is the last element
-        # The user's dataset uses binary gripper values (0 for closed, 1 for open).
-        # Map 0 to -1 and 1 to 1.
-        tcp_list[:, -1] = tcp_list[:, -1] * 2 - 1
-        return tcp_list
 
     def __len__(self):
         return len(self.sampler)
-    
+
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        self.normalizer = normalizer
+
+    def get_normalizer(self, device='cpu') -> LinearNormalizer:
+        normalizer = LinearNormalizer()
+
+        if self.translation_norm_config is not None:
+            # Use pre-defined min/max for translation
+            translation_config = np.array(self.translation_norm_config)
+            t_min = torch.from_numpy(translation_config[:, 0]).to(dtype=torch.float32, device=device)
+            t_max = torch.from_numpy(translation_config[:, 1]).to(dtype=torch.float32, device=device)
+
+            # Create normalizer from min/max
+            # Logic from _fit function in normalizer.py
+            output_max = 1.0
+            output_min = -1.0
+            range_eps = 1e-4
+            
+            input_range = t_max - t_min
+            input_range[input_range < range_eps] = output_max - output_min
+            scale = (output_max - output_min) / input_range
+            offset = output_min - scale * t_min
+            
+            # Create ParameterDict for the normalizer
+            params_dict = nn.ParameterDict({
+                'scale': scale,
+                'offset': offset,
+                'input_stats': nn.ParameterDict({
+                    'min': t_min, 'max': t_max,
+                    'mean': torch.zeros_like(t_min), 'std': torch.ones_like(t_min)
+                })
+            })
+            for p in params_dict.parameters():
+                p.requires_grad_(False)
+
+            # Apply the same normalizer to both obs and action translation
+            translation_normalizer = SingleFieldLinearNormalizer(params_dict)
+            normalizer['action_translation'] = translation_normalizer
+            normalizer['obs_translation'] = translation_normalizer
+        else:
+            # Fallback to data-driven normalization for translation
+            all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+            all_robot_obs = torch.from_numpy(self.replay_buffer['robot_obs'][:]).to(device)
+            action_trans_data = all_actions[:, :3]
+            obs_trans_data = all_robot_obs[:, :3]
+            normalizer['action_translation'] = SingleFieldLinearNormalizer.create_fit(action_trans_data)
+            normalizer['obs_translation'] = SingleFieldLinearNormalizer.create_fit(obs_trans_data)
+
+        # Gripper and color normalization remains data-driven
+        all_robot_obs = torch.from_numpy(self.replay_buffer['robot_obs'][:]).to(device)
+        obs_grip_data = all_robot_obs[:, 6:7]
+        normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
+
+        all_colors = []
+        for i in tqdm(range(self.replay_buffer.n_episodes), desc="Calculating PointCloud Color Stats"):
+            data = self.replay_buffer.get_episode(i)
+            points = data['pointcloud']
+            for pc in points:
+                if len(pc) > 0:
+                    all_colors.append(pc[:, 3:6])
+        
+        if all_colors:
+            all_colors = np.concatenate(all_colors, axis=0) 
+            all_colors = torch.from_numpy(all_colors).to(device)
+            color_normalizer = SingleFieldLinearNormalizer.create_fit(all_colors, mode='gaussian')
+            normalizer['pointcloud_color'] = color_normalizer
+        
+        return normalizer
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         threadpool_limits(1)
@@ -198,12 +260,8 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         # Convert action from Euler angles to 6D representation for the policy
         pose_euler = actions_euler[:, :6]
         gripper_action = actions_euler[:, 6:]
-
-        pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="XYZ")
-        
+        pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="ZYX")
         actions_10d = np.concatenate([pose_9d, gripper_action], axis=-1)
-        # Normalize actions
-        actions_normalized = self._normalize_tcp(actions_10d.copy())
 
         # Voxelize for MinkowskiEngine
         input_coords_list = []
@@ -217,44 +275,33 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,
             'action': torch.from_numpy(actions_10d).float(),
-            'action_normalized': torch.from_numpy(actions_normalized).float(),
-            'action_euler': torch.from_numpy(actions_euler).float()
         }
 
-    def get_normalizer(self, **kwargs) -> LinearNormalizer:
-        # This needs to be implemented according to the data format
-        # For now, returning an identity normalizer
-        normalizer = LinearNormalizer()
-        for key in self.lowdim_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_identity()
-        normalizer['action'] = SingleFieldLinearNormalizer.create_identity()
-        for key in self.pointcloud_keys:
-            normalizer[key] = SingleFieldLinearNormalizer.create_identity()
-        return normalizer
 
-# RISE-specific collate function
+
 def collate_fn(batch):
     if not isinstance(batch, list):
         return batch
     
     elem = batch[0]
-    if isinstance(elem, container_abcs.Mapping):
-        ret_dict = {}
-        for key in elem:
-            if key in ['action', 'action_normalized', 'action_euler']:
-                ret_dict[key] = torch.stack([d[key] for d in batch], 0)
-            elif key in ['input_coords_list', 'input_feats_list']:
-                flat_list = [item for sublist in [d[key] for d in batch] for item in sublist]
-                if key == 'input_coords_list':
-                    coords_list = flat_list
-                else:
-                    feats_list = flat_list
-            else:
-                ret_dict[key] = [d[key] for d in batch]
+    if not isinstance(elem, container_abcs.Mapping):
+        raise TypeError(f"Batch must contain dicts, but found {type(elem)}")
+    
+    ret_dict = {}
+    coords_list = list()
+    feats_list = list()
 
-        coords_batch, feats_batch = ME.utils.sparse_collate(coords_list, feats_list)
+    for key in elem:
+        if key in ['input_coords_list', 'input_feats_list']:
+            flat_list = [item for d in batch for item in d[key]]
+            if key == 'input_coords_list':
+                coords_list.extend(flat_list)
+            else:
+                feats_list.extend(flat_list)
+        else:
+            ret_dict[key] = torch.stack([d[key] for d in batch], dim =0)
+    if coords_list and feats_list:
+        coords_batch, feats_batch = ME.utils.sparse_collate(coords=coords_list, feats=feats_list)
         ret_dict['input_coords_list'] = coords_batch
         ret_dict['input_feats_list'] = feats_batch
-        return ret_dict
-
-    raise TypeError(f"Batch must contain dicts, but found {type(elem)}")
+    return ret_dict
