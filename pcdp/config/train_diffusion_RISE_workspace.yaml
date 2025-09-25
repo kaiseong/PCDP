@@ -77,8 +77,8 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "nscl_${now:%Y.%m.%d}"
-  project: rise
+  name: "RISE_${now:%Y.%m.%d}"
+  project: Test_1
   resume: true
   tags:
   - rise

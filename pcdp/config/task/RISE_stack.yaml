@@ -31,7 +31,7 @@ dataset:
   use_cache: True
   voxel_size: 0.005
   seed: 233
-  val_ratio: 0.1
+  val_ratio: 0.0
   max_train_episodes: null
   aug: False
   aug_trans_min: [-0.2, -0.2, -0.2]

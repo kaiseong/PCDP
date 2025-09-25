@@ -71,7 +71,7 @@ class RISEPolicy(BasePointCloudPolicy):
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1]
         readout = readout[:, 0]
         if actions is not None:
-            loss, _ = self.action_decoder.compute_loss(readout, actions)
+            loss = self.action_decoder.compute_loss(readout, actions)
             return loss
         else:
             with torch.no_grad():

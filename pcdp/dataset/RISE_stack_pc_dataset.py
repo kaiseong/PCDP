@@ -14,6 +14,7 @@ import MinkowskiEngine as ME
 import torchvision.transforms as T
 import collections.abc as container_abcs
 import torch.nn as nn
+from tqdm import tqdm
 
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.model.common.normalizer import LinearNormalizer
@@ -110,6 +111,11 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         pointcloud_keys = [k for k, v in shape_meta.obs.items() if v.type == 'pointcloud']
         lowdim_keys = [k for k, v in shape_meta.obs.items() if v.type == 'low_dim']
         
+        key_first_k = dict()
+        if n_obs_steps is not None:
+            for key in pointcloud_keys + lowdim_keys:
+                key_first_k[key] = n_obs_steps
+        
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
@@ -129,7 +135,8 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             sequence_length=horizon+n_latency_steps,
             pad_before=pad_before, 
             pad_after=pad_after,
-            episode_mask=episode_mask)
+            episode_mask=episode_mask,
+            key_first_k=key_first_k)
         
         self.replay_buffer = replay_buffer
         self.shape_meta = shape_meta
@@ -154,6 +161,8 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         self.voxel_size = voxel_size
         self.split = split
         self.n_latency_steps = n_latency_steps
+        self.normalizer = None
+        self.translation_norm_config = None
 
 
     def set_translation_norm_config(self, config):
