@@ -64,7 +64,7 @@ dataset:
     workspace_bounds:
       - [-0.000, 0.715]    # X range (meters)
       - [-0.400, 0.350]   # Y range (meters)  
-      - [-0.100, 0.400]    # Z range (meters)
+      - [-0.100, 0.600]    # Z range (meters)
     
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:

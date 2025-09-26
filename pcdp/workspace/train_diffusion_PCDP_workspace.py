@@ -197,23 +197,6 @@ class TrainPCDPWorkspace(BaseWorkspace):
 
                 norm = normalizer['obs_translation']
         
-                x = torch.rand(10000, 3, device=device) * (0.715 - 0.) + 0.
-                y = norm.normalize(x)
-                x_rec = norm.unnormalize(y)
-                err = (x - x_rec).abs().max().item()
-                print(f"[roundtrip/obs] max error: {err:.3e}")
-
-                # 클램프 비율도 모니터링하면 좋음(경계 밖 빈도 체크)
-                clamp_frac = (y.abs() >= 0.999).float().mean().item()
-                print(f"[roundtrip/obs] clamp frac: {clamp_frac:.3%}")
-
-                # action도 동일 규칙 확인
-                norm_a = normalizer['action_translation']
-                xa = torch.rand(10000, 3, device=device) * (0.715 - 0.0) + 0.0
-                ya = norm_a.normalize(xa)
-                xa_rec = norm_a.unnormalize(ya)
-                err_a = (xa - xa_rec).abs().max().item()
-                print(f"[roundtrip/action] max error: {err_a:.3e}")
 
                 if cfg.training.use_ema:
                     ema.step(self.model)

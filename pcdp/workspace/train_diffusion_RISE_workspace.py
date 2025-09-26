@@ -188,7 +188,7 @@ class TrainRISEWorkspace(BaseWorkspace):
                         # data to device
                         cloud_coords = data['input_coords_list'].to(device)
                         cloud_feats = data['input_feats_list'].to(device)
-                        action_data = data['action_normalized'].to(device)
+                        action_data = data['action'].to(device)
                         cloud_data = ME.SparseTensor(cloud_feats, cloud_coords)
                         loss = self.model(cloud_data, action_data,batch_size=action_data.shape[0])
                         val_loss += loss.item()

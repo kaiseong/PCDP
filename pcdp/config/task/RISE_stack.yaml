@@ -3,7 +3,7 @@ name: RISE_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/test/recorder_data
+dataset_path: data/last_dance/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -26,7 +26,6 @@ dataset:
   n_obs_steps: ${dataset_obs_steps}
   pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
   pad_after: ${eval:'${n_action_steps}-1'}
-  n_obs_steps: ${dataset_obs_steps}
   n_latency_steps: ${n_latency_steps}
 
   use_cache: True
@@ -49,7 +48,6 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_rgb_normalize: True
     use_cuda: True
     verbose: False
 

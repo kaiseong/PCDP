@@ -74,12 +74,12 @@ training:
   validation_every: 5
   # new
   contrastive_lambda_max: 0.5
-  contrastive_warmup_steps: 100
+  contrastive_warmup_steps: 6000
   # normalization
   translation:
-    - [-0.040, 0.755]    # X range (meters)
-    - [-0.110, 0.640]   # Y range (meters)  
-    - [-0.100, 0.400]    # Z range (meters)
+    - [-0.142, 0.585]    # X range (meters)
+    - [-0.500, 0.330]   # Y range (meters)  
+    - [-0.085, 0.470]    # Z range (meters)
   
 logging:
   group: ${exp_name}

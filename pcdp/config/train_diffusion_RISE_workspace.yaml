@@ -36,13 +36,13 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 200
+  batch_size: 180
   num_workers: 22
   shuffle: True
   drop_last: True
 
 val_dataloader:
-  batch_size: 200
+  batch_size: 180
   num_workers: 22
   shuffle: False
   drop_last: False
@@ -57,15 +57,21 @@ optimizer:
 training:
   device: "cuda:0"
   seed: 233
-  debug: True
+  debug: False
   resume: True
   lr_warmup_steps: 2000
-  num_epochs: 1000
+  num_epochs: 2000
   use_ema: False
   rollout_every: 5
-  save_epochs: 5
+  save_epochs: 100
   tqdm_interval_sec: 1.0
   validation_every: 5
+  # normalize
+  translation:
+    - [-0.142, 0.585]    # X range (meters)
+    - [-0.500, 0.330]   # Y range (meters)  
+    - [-0.085, 0.470]    # Z range (meters)
+
 
 logging:
   group: ${exp_name}
