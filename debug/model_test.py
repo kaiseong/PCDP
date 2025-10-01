@@ -28,7 +28,7 @@ import torch.nn.functional as F
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from pcdp.dataset.RISE_stack_pc_dataset import collate_fn
+from pcdp.dataset.RISE_stack_dataset import collate_fn
 from pcdp.policy.diffusion_RISE_policy import RISEPolicy
 from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common import RISE_transformation as rise_tf

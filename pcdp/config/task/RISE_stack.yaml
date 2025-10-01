@@ -3,7 +3,7 @@ name: RISE_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/last_dance/recorder_data
+dataset_path: data/please/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -19,7 +19,7 @@ env_runner:
   _target_: pcdp.env_runner.RISE_runner.RISEPointCloudRunner
 
 dataset:
-  _target_: pcdp.dataset.RISE_stack_pc_dataset.RISE_RealStackPointCloudDataset
+  _target_: pcdp.dataset.RISE_stack_dataset.RISE_RealStackPointCloudDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
   horizon: ${horizon}
@@ -62,7 +62,7 @@ dataset:
     workspace_bounds:
       - [-0.000, 0.715]    # X range (meters)
       - [-0.400, 0.350]   # Y range (meters)  
-      - [-0.100, 0.400]    # Z range (meters)
+      - [-0.100, 0.600]    # Z range (meters)
     
   enable_low_dim_preprocessing: True
   low_dim_preprocessor_config:

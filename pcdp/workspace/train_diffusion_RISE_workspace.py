@@ -25,7 +25,7 @@ from termcolor import cprint
 from pcdp.workspace.base_workspace import BaseWorkspace
 from pcdp.policy.diffusion_RISE_policy import RISEPolicy
 from pcdp.dataset.base_dataset import BasePointCloudDataset
-from pcdp.dataset.RISE_stack_pc_dataset import collate_fn
+from pcdp.dataset.RISE_stack_dataset import collate_fn
 from pcdp.env_runner.base_pointcloud_runner import BasePointCloudRunner 
 import pcdp.common.mono_time as mono_time
 from pcdp.common.checkpoint_util import TopKCheckpointManager

@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 import time
 
-from pcdp.dataset.RISE_stack_pc_dataset import collate_fn # RISE collate_fn
+from pcdp.dataset.RISE_stack_dataset import collate_fn # RISE collate_fn
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 from pcdp.common import RISE_transformation as rise_tf
 

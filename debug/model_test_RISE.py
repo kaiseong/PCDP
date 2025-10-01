@@ -1,4 +1,3 @@
-
 """
 model_test.py
 
@@ -28,13 +27,10 @@ import torch.nn.functional as F
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from pcdp.dataset.RISE_stack_pc_dataset import collate_fn
+from pcdp.dataset.RISE_stack_dataset import collate_fn
 from pcdp.policy.diffusion_RISE_policy import RISEPolicy
-from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common import RISE_transformation as rise_tf
-from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
-from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 
 robot_to_base = np.array([
     [1.,         0.,         0.,          -0.04],
@@ -43,46 +39,18 @@ robot_to_base = np.array([
     [0.,         0.,         0.,          1.0]
 ])
 
-
-
 # Visualization constants
 EEF_FRAME_SIZE = 0.03
 POINT_SIZE = 2.0
 HORIZON = 16
 
-
-
-# --- Normalization Functions ---
-def _unnormalize_action(action_10d):
-    """
-    주어진 6D 회전 표현 액션을 역정규화합니다.
-    action_6d: (N, 10) 크기의 배열 - [x, y, z, rot_6d(6), gripper(1)]
-    """
-    # TRANS_MIN/MAX는 (3,) 크기이므로 앞 3개 요소에만 적용
-    trans_min_exp = torch.from_numpy(ACTION_TRANS_MIN).to(action_10d.device).float()
-    trans_max_exp = torch.from_numpy(ACTION_TRANS_MAX).to(action_10d.device).float()
-    
-    # 위치 역정규화: [-1, 1] -> [min, max]
-    action_10d[..., :3] = (action_10d[..., :3] + 1) / 2.0 * (trans_max_exp - trans_min_exp) + trans_min_exp
-    
-    # 그리퍼 역정규화: [-1, 1] -> [0, 1] (0: closed, 1: open)
-    # RISE의 그리퍼 값은 너비가 아닌 상태를 나타내므로 여기서는 0과 1 사이로 매핑
-    action_10d[..., -1] = (action_10d[..., -1] + 1) / 2.0 
-    return action_10d
-
-def obs_normalize_(tcp_list, trans_max, trans_min, grip_max=None, grip_min=None):
-    tcp_list[:3] = (tcp_list[:3] - trans_min) / (trans_max - trans_min) * 2 - 1
-    tcp_list[-1] = (tcp_list[-1] - grip_min ) / (grip_max - grip_min) *2 -1
-
-    return tcp_list
-
-@hydra.main(version_base=None, config_path="../pcdp/config", config_name="train_diffusion_PCDP_workspace")
+@hydra.main(version_base=None, config_path="../pcdp/config", config_name="train_diffusion_RISE_workspace")
 def main(cfg: OmegaConf):
     # Register the 'eval' resolver
     OmegaConf.register_new_resolver("eval", eval)
     
     # --- Visualization Control ---
-    vis_gt = False
+    vis_gt = True
     vis_pred = True
     # ---------------------------
 
@@ -93,12 +61,12 @@ def main(cfg: OmegaConf):
     if 'vis_mode' not in cfg:
         cfg.vis_mode = 'coord'
 
-    # --- 1. Load Checkpoint Path from command line ---
-    if not hasattr(cfg, 'checkpoint_path') or cfg.checkpoint_path is None:
-        print("Error: Please provide the checkpoint path using the override 'checkpoint_path=/path/to/your.ckpt'")
-        sys.exit(1)
+    # --- 1. Load Checkpoint Path ---
+    # The project_root is defined in the global scope.
+    # We use it to create an absolute path to the checkpoint to avoid issues with Hydra's CWD management.
+    relative_path = "data/outputs/2025.09.26/01.51.44_train_diffusion_RISE_RISE_stack/checkpoints/policy_epoch_2000_seed_233.ckpt"
+    checkpoint_path = os.path.join(project_root, relative_path)
     
-    checkpoint_path = cfg.checkpoint_path
     if not os.path.exists(checkpoint_path):
         print(f"Error: Checkpoint path not found at {checkpoint_path}")
         sys.exit(1)
@@ -106,10 +74,8 @@ def main(cfg: OmegaConf):
     # --- 2. Setup: Device, Model, Dataset ---
     device = torch.device(cfg.training.device)
 
-
     # Load model from config
-    model: PCDPPolicy = hydra.utils.instantiate(cfg.policy).to(device)
-    low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
+    model: RISEPolicy = hydra.utils.instantiate(cfg.policy).to(device)
     
     # Load checkpoint
     print(f"Loading checkpoint from: {checkpoint_path}")
@@ -122,12 +88,9 @@ def main(cfg: OmegaConf):
             if 'model' in checkpoint['state_dicts']:
                 model_state_dict = checkpoint['state_dicts']['model']
                 print("Loaded state_dict from checkpoint['state_dicts']['model']")
-            elif 'policy' in checkpoint['state_dicts']:
-                model_state_dict = checkpoint['state_dicts']['policy']
-                print("Loaded state_dict from checkpoint['state_dicts']['policy']")
             else:
-                print(f"Error: Could not find 'model' or 'policy' key inside 'state_dicts'.")
-                print(f"Available keys in 'state_dicts': {list(checkpoint['state_dicts'].keys())}")
+                print(f"Error: Could not find 'model' key inside 'state_dicts'.")
+                print(f"Available keys: {list(checkpoint['state_dicts'].keys())}")
                 sys.exit(1)
         elif 'model' in checkpoint:
             model_state_dict = checkpoint['model']
@@ -155,6 +118,13 @@ def main(cfg: OmegaConf):
 
     # Load dataset from config
     dataset = hydra.utils.instantiate(cfg.task.dataset)
+    
+    # Get and set normalizer
+    print("Computing normalizer from dataset...")
+    normalizer = dataset.get_normalizer(device=device)
+    model.set_normalizer(normalizer)
+    print("Normalizer set on model.")
+
     dataloader = torch.utils.data.DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
     batch_iter = iter(dataloader)
     
@@ -187,7 +157,6 @@ def main(cfg: OmegaConf):
         nonlocal batch_iter, first_load, global_batch_counter, current_batch, current_sample_idx
 
         # Determine batch size from config
-        # Fallback to 1 if not specified, though it should be.
         batch_size = cfg.dataloader.get('batch_size', 1)
 
         # Check if we need to load a new batch or advance the sample index
@@ -203,13 +172,13 @@ def main(cfg: OmegaConf):
             current_sample_idx += 1
         
         # Check if the new batch is smaller than the configured batch_size (last batch)
-        actual_batch_size = current_batch['action_euler'].shape[0]
+        actual_batch_size = current_batch['action'].shape[0]
         if current_sample_idx >= actual_batch_size:
             try:
                 current_batch = next(batch_iter)
                 current_sample_idx = 0
                 global_batch_counter += 1
-                actual_batch_size = current_batch['action_euler'].shape[0]
+                actual_batch_size = current_batch['action'].shape[0]
             except StopIteration:
                 print("All samples and batches processed. Press 'Q' to exit.")
                 return
@@ -228,40 +197,56 @@ def main(cfg: OmegaConf):
         obs_coords = coords[point_indices]
 
         # Get robot obs and ground truth for the current sample
-        robot_obs = batch['robot_obs'][sample_idx].to(device)
-        gt_action_euler = batch['action_euler'][sample_idx].to(device) # T, 7
+
+        gt_action_10d = batch['action'][sample_idx].to(device) # T, 10
+        
+        # Convert ground truth 6D rot to euler for visualization
+        gt_action_euler = rise_tf.xyz_rot_transform(
+            gt_action_10d[..., :9].cpu().numpy(),
+            from_rep='rotation_6d',
+            to_rep='euler_angles',
+            to_convention='ZYX'
+        )
+        gt_action_euler = np.concatenate([gt_action_euler, gt_action_10d[..., 9:].cpu().numpy()], axis=-1)
+        gt_action_euler = torch.from_numpy(gt_action_euler).to(device)
 
         # --- 5. Model Prediction ---
         with torch.no_grad():
             # Prepare observation for model
-            # Note: We create a new batch for the model with a single sample
             model_obs_coords = obs_coords.clone()
             model_obs_coords[:, 0] = 0 # Reset batch index for the single-sample batch
             obs_coords_batch = model_obs_coords.to(device)
             obs_feats_batch = torch.from_numpy(obs_pcd_np).to(device)
             obs_tensor = ME.SparseTensor(features=obs_feats_batch, coordinates=obs_coords_batch, device=device)
             
-            # Predict action. Pass a batch_size of 1 as we process one sample at a time.
-            pred_action_normalized = model.forward(obs_tensor, obs=robot_obs.unsqueeze(0), batch_size=1)
+            # Predict action. The model now returns un-normalized actions directly.
+            pred_action_10d = model.forward(obs_tensor, batch_size=1)
+            pred_action_10d = pred_action_10d.squeeze(0) # Remove batch dimension
             
             # --- 6. Post-processing and Comparison ---
-            # Un-normalize predicted action
-            pred_action_10d = _unnormalize_action(pred_action_normalized)
-            
-            # Convert predicted 6D rot to euler for comparison
-            pred_action_euler = xyz_rot_transform(
+            # Convert predicted 6D rot to euler for comparison and visualization
+            pred_action_euler = rise_tf.xyz_rot_transform(
                 pred_action_10d[..., :9].cpu().numpy(),
                 from_rep='rotation_6d',
                 to_rep='euler_angles',
-                to_convention='XYZ'
+                to_convention='ZYX'
             )
             pred_action_euler = np.concatenate([pred_action_euler, pred_action_10d[..., 9:].cpu().numpy()], axis=-1)
             pred_action_euler = torch.from_numpy(pred_action_euler).to(device)
-            pred_action_euler = pred_action_euler.squeeze(0)
 
             # Calculate MSE loss for the whole action (pos, rot, gripper)
             pos_loss = F.mse_loss(pred_action_euler, gt_action_euler)
             print(f"\n--- Batch {global_batch_counter}, Sample {sample_idx + 1}/{actual_batch_size} ---")
+
+            # DEBUG PRINT: Compare GT and Pred coordinates for the first timestep
+            gt_pos_t0 = gt_action_euler[0, :3].cpu().numpy()
+            pred_pos_t0 = pred_action_euler[0, :3].cpu().numpy()
+            offset_vec = gt_pos_t0 - pred_pos_t0
+            print(f"DEBUG: First Timestep Position (x,y,z)")
+            print(f"  - Ground Truth: {gt_pos_t0}")
+            print(f"  - Prediction:   {pred_pos_t0}")
+            print(f"  - Offset (GT-Pred): {offset_vec}")
+
             print(f"Total Action MSE Loss: {pos_loss.item():.6f}")
 
         # --- 7. Visualization ---
@@ -275,7 +260,9 @@ def main(cfg: OmegaConf):
 
         # Update point cloud
         xyz = obs_pcd_np[:, :3]
-        rgb = obs_pcd_np[:, 3:6]*IMG_STD+IMG_MEAN
+        # Un-normalize color for visualization
+        rgb = obs_pcd_np[:, 3:6]
+        
         geometries['pcd'].points = o3d.utility.Vector3dVector(xyz)
         geometries['pcd'].colors = o3d.utility.Vector3dVector(rgb)
         
