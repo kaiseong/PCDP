@@ -39,7 +39,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 210
+  batch_size: 220
   num_workers: 15
   shuffle: True
   pin_memory: True
@@ -66,14 +66,15 @@ training:
   seed: 233
   debug: False
   resume: True
-  num_epochs: 1500
+  lr_warmup_steps: 2000
+  num_epochs: 2000
   use_ema: True
   rollout_every: 5
-  save_epochs: 20
+  save_epochs: 100
   tqdm_interval_sec: 1.0
   validation_every: 5
   # new
-  contrastive_lambda_max: 0.5
+  contrastive_lambda_max: 0.25
   contrastive_warmup_steps: 6000
   # normalization
   translation:
@@ -85,11 +86,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "moai_${now:%Y.%m.%d}-( nb_point: 15, STD: 1.7, Filter On)"
-  project: pcdp
+  name: "PCDP_${now:%Y.%m.%d}-(robot_obs MLP, No Filter, const_max: ${training.contrastive_lambda_max}, warm_step: ${training.contrastive_warmup_steps})"
+  project: Test_1
   resume: true
   tags:
-  - stack3
+  - PCDP_MoAI
 
 checkpoint:
   save_ckpt: True

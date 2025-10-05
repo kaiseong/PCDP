@@ -60,7 +60,7 @@ def main(cfg: OmegaConf):
     # Set default visualization mode if not provided from command line
     if 'vis_mode' not in cfg:
         cfg.vis_mode = 'coord'
-
+    cfg.checkpoint_path="data/outputs/PCDP_NSCL/checkpoints/latest.ckpt"
     # --- 1. Load Checkpoint Path from command line ---
     if not hasattr(cfg, 'checkpoint_path') or cfg.checkpoint_path is None:
         print("Error: Please provide the checkpoint path using the override 'checkpoint_path=/path/to/your.ckpt'")
@@ -118,7 +118,10 @@ def main(cfg: OmegaConf):
 
     # Load dataset from config
     dataset = hydra.utils.instantiate(cfg.task.dataset)
-    
+
+    if 'translation' in cfg.training:
+        dataset.set_translation_norm_config(cfg.training.translation)
+
     # Get and set normalizer
     print("Computing normalizer from dataset...")
     normalizer = dataset.get_normalizer(device=device)
@@ -251,10 +254,7 @@ def main(cfg: OmegaConf):
         # Update point cloud
         xyz = obs_pcd_np[:, :3]
         # Un-normalize color for visualization
-        color_stats = normalizer['pointcloud_color'].input_stats
-        IMG_MEAN = color_stats['mean'].cpu().numpy()
-        IMG_STD = color_stats['std'].cpu().numpy()
-        rgb = obs_pcd_np[:, 3:6] * IMG_STD + IMG_MEAN
+        rgb = obs_pcd_np[:, 3:6]
         
         geometries['pcd'].points = o3d.utility.Vector3dVector(xyz)
         geometries['pcd'].colors = o3d.utility.Vector3dVector(rgb)

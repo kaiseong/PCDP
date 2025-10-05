@@ -105,6 +105,9 @@ class PCDPPolicy(BasePointCloudPolicy):
                 coordinates=cloud.C,
                 device=cloud.device
             )
+            
+            if robot_obs.dim() == 2: # train: [B, 1, 10], Inference: [B, 10]
+                robot_obs = robot_obs.unsqueeze(1)
 
             # Normalize low-dim robot_obs
             # robot_obs: (B, T, 10) where T=n_obs_steps
@@ -130,8 +133,7 @@ class PCDPPolicy(BasePointCloudPolicy):
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1] # [B, 1, 512]
         readout_raw = readout[:, 0, :]  # [B,512]  (대조 q는 이걸 사용)
         
-        if robot_obs.dim() == 2: # train: [B, 1, 10], Inference: [B, 10]
-            robot_obs = robot_obs.unsqueeze(1)
+        
         
         cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
         global_cond = self.cond_proj(cond_in)

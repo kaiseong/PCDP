@@ -3,7 +3,7 @@ name: PCDP_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/last_dance/recorder_data
+dataset_path: data/please/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -47,7 +47,7 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_filter: True
+    enable_filter: False
     nb_points: 15
     sor_std: 1.7
     use_cuda: True
