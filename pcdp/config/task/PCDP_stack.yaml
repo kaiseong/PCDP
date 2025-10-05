@@ -14,9 +14,9 @@ shape_meta: &shape_meta
     robot_obs:
       shape: [7]  # 6DOF + gripper_width
       type: low_dim
-    occlusion:
-      shape: [1]
-      type: low_dim
+    # occlusion:
+    #   shape: [1]
+    #   type: low_dim
 
   action: 
     shape: [7]  # 6DOF + gripper_toggle
