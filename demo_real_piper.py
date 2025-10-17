@@ -1,6 +1,6 @@
 """
 Usage:
-(robodiff)$ python demo_real_robot.py -o <demo_save_dir> 
+(robodiff)$ python demo_real_piper.py -o <demo_save_dir> 
 
 Robot movement:
 Move your SpaceMouse to move the robot EEF (locked in xy plane).
@@ -32,6 +32,27 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
+
+def make_status_panel(episode_id: int, recording: bool, stage: int, extra_text: str=""):
+    h, w = 120, 520
+    panel = np.zeros((h, w, 3), dtype=np.uint8)
+    panel[:] = (30, 30, 30)
+
+    dot_color = (0, 200, 0) if recording else(0, 0, 200)
+    cv2.circle(panel, (20, 30), 10, dot_color, thickness=-1, lineType=cv2.LINE_AA)
+    cv2.putText(panel, "Recording" if recording else "Stopped",
+                (40, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1, cv2.LINE_AA)
+    
+    cv2.putText(panel, f"Episode: {episode_id}", (20, 70),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 230, 230), 2, cv2.LINE_AA)
+    cv2.putText(panel, f"Stage:  {stage}", (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 230, 230), 2, cv2.LINE_AA)
+    
+    if extra_text:
+        cv2.putText(panel, extra_text, (260, 36),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
+    return panel
+
 
 camera_to_base = np.array([
     [  0.007131,  -0.91491,    0.403594,  0.05116],
@@ -93,6 +114,8 @@ def main(output, visual, init_joints, frequency, command_latency):
                 shm_manager=shm_manager
             ) as env:
             cv2.setNumThreads(1)
+
+            cv2.namedWindow("Recording Status", cv2.WINDOW_AUTOSIZE)
             
             include_d405 = False
 
@@ -118,6 +141,8 @@ def main(output, visual, init_joints, frequency, command_latency):
             stop = False
             is_recording = False
             visual_= visual
+            
+            stage=0
 
             if visual_:
                 # open3d visualization
@@ -168,12 +193,24 @@ def main(output, visual, init_joints, frequency, command_latency):
                             key_counter.clear()
                             is_recording = False
                         # delete
-                stage = key_counter[Key.space]
-
+                    elif isinstance(key_stroke, KeyCode) and key_stroke.char is not None and key_stroke.char.isdigit():
+                        # 문자 '0'~'9' -> 정수 0~9
+                        stage = int(key_stroke.char)
+                        print(f"[Stage] set to {stage}")
+                
                 # visualize
                 # if is_recording:
                     # print("recoding!")
                 episode_id = env.recorder.n_episodes
+                panel = make_status_panel(
+                    episode_id=episode_id,
+                    recording=is_recording,
+                    stage=stage,
+                    extra_text="C: Start  S: stop  Q: quit 0-9: stage"
+                )
+                cv2.imshow("Status", panel)
+                cv2.waitKey(1)
+
                 text = f'Episode: {episode_id}, Stage: {stage}'
                 if is_recording:
                     text += ', Recording!'
@@ -254,8 +291,6 @@ def main(output, visual, init_joints, frequency, command_latency):
                     duration = np.append(duration, diff)
                 t0 = mono_time.now_ms()
                 
-
-
                 precise_wait(t_sample)
                 # get teleop command
                 target_pose = ms.get_motion_state()
@@ -268,6 +303,11 @@ def main(output, visual, init_joints, frequency, command_latency):
                     recorded_actions=[action_to_record])
                 precise_wait(t_cycle_end)
                 iter_idx += 1
+            try:
+                cv2.destroyWindow("Status")
+            except cv2.error:
+                pass
+            
             if duration.size > 1:
                 duration = duration[1:]
                 print(f"""[demo_real_piper]

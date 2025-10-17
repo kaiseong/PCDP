@@ -1,4 +1,4 @@
-# pcdp_stack_dataset.py
+# SCDP_stack_dataset.py
 from typing import Dict, List
 import torch
 import numpy as np
@@ -26,7 +26,7 @@ from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 from tqdm import tqdm
 from pcdp.common.RISE_transformation import xyz_rot_transform
 
-class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
+class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
             dataset_path: str,

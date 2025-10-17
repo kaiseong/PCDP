@@ -1,4 +1,4 @@
-# diffusion_unet_dp3_policy.py
+# diffusion_SCDP_policy.py
 import copy
 import torch
 import torch.nn as nn
@@ -12,7 +12,7 @@ from pcdp.policy.RISE_transformer import Transformer
 import MinkowskiEngine as ME
 from pcdp.model.common.normalizer import LinearNormalizer
 
-class PCDPPolicy(BasePointCloudPolicy):
+class SCDPPolicy(BasePointCloudPolicy):
     def __init__(
             self,
             num_action = 20,
@@ -24,7 +24,8 @@ class PCDPPolicy(BasePointCloudPolicy):
             num_encoder_layers = 4,
             num_decoder_layers = 1,
             dim_feedforward = 2048,
-            dropout = 0.1
+            dropout = 0.1,
+            use_s_offset_embedding: bool = True,
     ):
         super().__init__()
         num_obs = 1
@@ -43,6 +44,23 @@ class PCDPPolicy(BasePointCloudPolicy):
             nn.Linear(obs_feature_dim, obs_feature_dim) # 512 -> 512
         )
 
+        self.use_s_offset_embedding=use_s_offset_embedding
+        self.d_model = obs_feature_dim
+        self.action_dim = action_dim
+        self.s_embed = nn.Embedding(2, obs_feature_dim)
+        self.s_to_obs = nn.Identity()
+
+        self.latency_head = nn.Sequential(
+            nn.LayerNorm(obs_feature_dim),
+            nn.Linear(obs_feature_dim, obs_feature_dim//2),
+            nn.SiLU(),
+            nn.Linear(obs_feature_dim//2, 2)
+        )
+        self.ptp_head == nn.Sequential(
+            nn.LayerNorm(obs_feature_dim),
+            nn.Linear(obs_feature_dim, 2*action_dim)
+        )
+
 
 
 
@@ -50,7 +68,7 @@ class PCDPPolicy(BasePointCloudPolicy):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
 
-    def forward(self, cloud: ME.SparseTensor, actions=None, robot_obs=None, batch_size=24):
+    def forward(self, cloud: ME.SparseTensor, actions=None, robot_obs=None, batch_size=24, return_latency: bool=False, s_index: torch.LongTensor|None=None):
         dev = cloud.F.device if hasattr(cloud, "F") else cloud.device
         # normalizer 디바이스 정렬 (방어적)
         if self.normalizer is not None:
@@ -98,11 +116,22 @@ class PCDPPolicy(BasePointCloudPolicy):
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1] # [B, 1, 512]
         readout_raw = readout[:, 0, :]  # [B,512]  (대조 q는 이걸 사용)
         
-        
-        
         cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
         # global_cond = self.cond_proj(cond_in)
         
+        B = batch_size
+        To = 1
+        global_cond = cond_in.reshape[B, -1]
+        logits_s = self.latency_head(global_cond)
+        ptp_flat = self.ptp_head(global_cond)
+        ptp_pred = ptp_flat.view(B, 2, self.action_dim)
+
+        if self.use_s_offset_embedding and s_index is not None:
+            s_idx = torch.clamp(s_index -1, 0, 1)
+            s_emb = self.s_embed(s_idx)
+            s_emb_obs = self.s_to_obs(s_emb)
+            s_add = s_emb_obs.repeat_interleave(To, dim=0)
+            cond_in = cond_in + s_add
         
         if actions is not None:
             # training mode
@@ -123,5 +152,11 @@ class PCDPPolicy(BasePointCloudPolicy):
                 unnorm_action_grip = (action_grip > 0).float()
 
                 action_pred = torch.cat([unnorm_action_trans, action_rot, unnorm_action_grip], dim=-1)
-
-            return action_pred
+            
+            if return_latency:
+                if self.training:
+                    return action_pred, logits_s, ptp_pred
+                else:
+                    return action_pred, logits_s
+            else:
+                return action_pred
