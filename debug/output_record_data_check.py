@@ -87,7 +87,7 @@ def point_cloud_visualize(obs_episode):
     preprocess = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
-                                        enable_filter=True)
+                                        enable_filter=False)
     pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
@@ -146,28 +146,29 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     obs_align_timestamp = obs_episode['align_timestamp']
     action = action_episode['action']
     output_filename_prefix = f"{episode_name}_output"
-
+    
+    """
     with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'orbbec_capture_timestamp', 'occlusion' ])
+        writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw', 'gripper'])
         for i, ts in enumerate(obs_align_timestamp):
             writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['occlusion'][i] ])
-
+    """
     # with open(f"{output_filename_prefix}_obs_dataset.csv", 'w', newline='') as csvfile:
     #     writer = csv.writer(csvfile)
     #     writer.writerow(['index', 'align_timestamp', 'robot_timestamp', 'd405_timestamp', 'orbbec_capture_timestamp', 'd405_capture_timestamp' ])
     #     for i, ts in enumerate(obs_align_timestamp):
     #         writer.writerow([i, ts, obs_episode['robot_timestamp'][i], obs_episode['d405_timestamp'][i], obs_episode['orbbec_capture_timestamp'][i], obs_episode['d405_capture_timestamp'][i] ])
 
-    with open(f"{output_filename_prefix}_action.csv", 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw', 'gripper'])
-        for i, act in enumerate(action):
-            writer.writerow([i] + act.tolist())
+    # with open(f"{output_filename_prefix}_action.csv", 'w', newline='') as csvfile:
+    #     writer = csv.writer(csvfile)
+    #     writer.writerow(['index', 'x', 'y', 'z', 'roll', 'pitch', 'yaw', 'gripper'])
+    #     for i, act in enumerate(action):
+    #         writer.writerow([i] + act.tolist())
             
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/last_dance/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0002')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0002')
+    analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/please_please/recorder_data")
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0008')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0008')

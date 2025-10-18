@@ -1,4 +1,4 @@
-# eval_piper.py
+# eval_piper2.py
 import time
 from multiprocessing.managers import SharedMemoryManager
 import click
@@ -19,7 +19,7 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
+from pcdp.policy.diffusion_PCDP_no_occl_policy import PCDPPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
@@ -80,11 +80,11 @@ def main(input, output, match_episode, frequency):
     
     # EMA 가중치가 있으면 사용하고, 없으면 일반 모델 가중치를 사용
     state_dict = payload['state_dicts']['model']
-    if 'ema_model' in payload['state_dicts']:
-        state_dict = payload['state_dicts']['ema_model']
-        cprint("Loading EMA model weights for evaluation.", "green")
-    else:
-        cprint("Loading non-EMA model weights for evaluation.", "yellow")
+    # if 'ema_model' in payload['state_dicts']:
+        # state_dict = payload['state_dicts']['ema_model']
+        # cprint("Loading EMA model weights for evaluation.", "green")
+    # else:
+        # cprint("Loading non-EMA model weights for evaluation.", "yellow")
     policy.load_state_dict(state_dict)
     
     device = torch.device(cfg.training.device)
@@ -163,7 +163,7 @@ def main(input, output, match_episode, frequency):
             test_start = 0
 
             while True:
-                t_cycle_end = t_start + (iter_idx + 1) * 1
+                t_cycle_end = t_start + (iter_idx + 1) * dt
                 obs = env.get_obs()
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
@@ -244,11 +244,26 @@ def main(input, output, match_episode, frequency):
                         action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
                         
                         # 4. 로봇 제어
-                        now = mono_time.now_s()
-                        timestamps = now + np.arange(len(action_sequence_7d)) * dt
+                        obs_timestamps = obs['timestamp']          # mono_time 기반이어야 함
+                        L = len(action_sequence_7d)
+                        action_offset = 0
+                        action_exec_latency = 0.01  # 10ms
+
+                        action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
+                        is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
+                        
+                        if not np.any(is_new):
+                            # 모두 과거면: 다음 슬롯에 마지막 1스텝만 예약
+                            next_step_time = mono_time.now_s() + dt
+                            action_timestamps = np.array([next_step_time], dtype=np.float64)
+                            action_sequence_7d = action_sequence_7d[[-1]]
+                        else:
+                            action_timestamps = action_timestamps[is_new]
+                            action_sequence_7d = action_sequence_7d[is_new]
+
                         env.exec_actions(
                             actions=action_sequence_7d,
-                            timestamps=timestamps
+                            timestamps=action_timestamps
                         )
                         if mono_time.now_ms()- test_start > 60000:
                             env.end_episode()

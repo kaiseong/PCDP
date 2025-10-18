@@ -15,6 +15,7 @@ from pcdp.shared_memory.shared_memory_queue import (
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 # from pcdp.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
 from pcdp.common.only_pose_trajectory_interpolator import PoseTrajectoryInterpolator
+# from pcdp.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import pcdp.common.mono_time as mono_time
 from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController
 # from pcdp.real_world.trac_ik_controller import TracIKController
@@ -390,10 +391,11 @@ class PiperInterpolationController(mp.Process):
                         if self.verbose:
                             cprint(f"[Piper_Controller] IK failed at t={t_now}", "red")
                 
-                if gripper <= 1.1 and gripper >= 0.9:
-                    piper.GripperCtrl(0, 1000, 0x01)
-                else:
-                    piper.GripperCtrl(95000, 1000, 0x01)
+                # if gripper <= 1.1 and gripper >= 0.9:
+                #     piper.GripperCtrl(0, 1000, 0x01)
+                # else:
+                #     piper.GripperCtrl(95000, 1000, 0x01)
+                piper.GripperCtrl(int(gripper*1e3), 1000, 0x01)
 
                 # 6. Store state in ring buffer
                 state["ArmJointMsgs"] = current_joints_rad

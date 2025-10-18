@@ -32,6 +32,7 @@ class PCDPPolicy(BasePointCloudPolicy):
         self.sparse_encoder = Sparse3DEncoder(input_dim, obs_feature_dim)
         self.transformer = Transformer(hidden_dim, nheads, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout)
         self.action_decoder = DiffusionUNetPolicy(action_dim, num_action, num_obs, obs_feature_dim + robot_obs_dim)
+        # self.action_decoder = DiffusionUNetPolicy(action_dim, num_action, num_obs, obs_feature_dim)
         self.readout_embed = nn.Embedding(1, hidden_dim)
         self.normalizer = LinearNormalizer()
         # policy
@@ -99,19 +100,19 @@ class PCDPPolicy(BasePointCloudPolicy):
         readout_raw = readout[:, 0, :]  # [B,512]  (대조 q는 이걸 사용)
         
         
-        
-        cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
+        global_cond = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
+        # cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
         # global_cond = self.cond_proj(cond_in)
         
         
         if actions is not None:
             # training mode
-            loss = self.action_decoder.compute_loss(cond_in, actions)
+            loss = self.action_decoder.compute_loss(global_cond, actions)
             return loss
         else:
             # inference mode
             with torch.no_grad():
-                action_pred = self.action_decoder.predict_action(cond_in)
+                action_pred = self.action_decoder.predict_action(global_cond)
 
             # un-normalize action prediction
             if self.normalizer is not None:

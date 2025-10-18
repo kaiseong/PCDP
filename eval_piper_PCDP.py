@@ -1,4 +1,4 @@
-# eval_piper_RISE.py
+# eval_piper2.py
 import time
 from multiprocessing.managers import SharedMemoryManager
 import click
@@ -19,12 +19,11 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_RISE_policy import RISEPolicy
+from pcdp.policy.diffusion_PCDP_policy import PCDPPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 from pcdp.model.common.normalizer import LinearNormalizer
-
 
 robot_to_base = np.array([
     [1.,         0.,         0.,          -0.04],
@@ -77,21 +76,21 @@ def main(input, output, match_episode, frequency):
     cfg = payload['cfg']
 
     # 정책 모델 초기화 및 가중치 로드
-    policy: RISEPolicy = hydra.utils.instantiate(cfg.policy)
+    policy: PCDPPolicy = hydra.utils.instantiate(cfg.policy)
     
     # EMA 가중치가 있으면 사용하고, 없으면 일반 모델 가중치를 사용
     state_dict = payload['state_dicts']['model']
-    if 'ema_model' in payload['state_dicts']:
-        state_dict = payload['state_dicts']['ema_model']
-        cprint("Loading EMA model weights for evaluation.", "green")
-    else:
-        cprint("Loading non-EMA model weights for evaluation.", "yellow")
+    # if 'ema_model' in payload['state_dicts']:
+        # state_dict = payload['state_dicts']['ema_model']
+        # cprint("Loading EMA model weights for evaluation.", "green")
+    # else:
+        # cprint("Loading non-EMA model weights for evaluation.", "yellow")
     policy.load_state_dict(state_dict)
     
     device = torch.device(cfg.training.device)
     policy.to(device).eval()
     cprint(f"Policy loaded on {device}", "green")
-    
+
     # =========================
     # Normalizer 설정 (재발 방지)
     # 1) 체크포인트 폴더에 normalizer.pt가 있으면 로드
@@ -106,7 +105,7 @@ def main(input, output, match_episode, frequency):
         cprint(f"Loaded normalizer: {n_path}", "green")
     else:
         # ⬇️ 학습과 같은 translation 정규화 범위를 강제 (오프셋 방지)
-        cfg.task.dataset._target_ = 'pcdp.dataset.RISE_stack_dataset.RISE_RealStackPointCloudDataset'
+        cfg.task.dataset._target_ = 'pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset'
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         if 'translation' in cfg.training:
             dataset.set_translation_norm_config(cfg.training.translation)
@@ -149,6 +148,7 @@ def main(input, output, match_episode, frequency):
             
             # YAML 설정에서 preprocessor_config를 가져와 PointCloudPreprocessor 인스턴스화
             pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
+            low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
             
             target_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
             plan_time = mono_time.now_s() + 2.0
@@ -176,7 +176,7 @@ def main(input, output, match_episode, frequency):
                         if not is_evaluating:
                             env.start_episode()
                             is_evaluating = True
-                            test_start= mono_time.now_ms()
+                            test_start = mono_time.now_ms()
                             cprint("Evaluation started!", "cyan")
                     elif key_stroke == KeyCode(char='s'):
                         if is_evaluating:
@@ -188,8 +188,20 @@ def main(input, output, match_episode, frequency):
                     with torch.no_grad():
                         # 1. 관측 데이터 전처리 (학습 파이프라인과 일치시킴)
                         pc_raw = obs['main_pointcloud'][-1]
-
+                        pose_raw = obs['robot_eef_pose'][-1].astype(np.float64)
+                        grip_raw = obs['robot_gripper'][-1].flatten().astype(np.float64)
+                        robot_obs_raw_7d = np.concatenate([pose_raw, grip_raw[:1]])
+                        # 로봇 관측값 좌표계 변환 (학습 데이터와 동일하게)
+                        transformed_obs_7d = low_preprocessor.TF_process(robot_obs_raw_7d[np.newaxis, :]).squeeze(0)
                         
+                        # Policy 입력을 위해 10D 텐서로 변환
+                        obs_pose_euler = transformed_obs_7d[:6]
+                        obs_gripper = transformed_obs_7d[6:]
+                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX')
+                        obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
+                        robot_obs_tensor = torch.from_numpy(obs_10d).to(device).float().unsqueeze(0)
+                        # shape is [1, 10]
+
                         # 포인트클라우드 전처리
                         pc = pc_preprocessor.process(pc_raw)
                         coords = np.ascontiguousarray(pc[:, :3] / voxel_size, dtype=np.int32)
@@ -199,10 +211,10 @@ def main(input, output, match_episode, frequency):
                             features=feats_batch, 
                             coordinates=coords_batch,
                             device=device)
-                        
                         t1 = mono_time.now_ms()
                         
-                        pred_action_10d = policy(cloud_data, batch_size=1).cpu()
+                        # 2. 액션 추론 (Policy가 Normalizer 상태까지 포함)
+                        pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1).cpu()
                         
                         print(f"inference: {mono_time.now_ms() - t1}")
                         print(f"loop time: {mono_time.now_ms() - t2}")

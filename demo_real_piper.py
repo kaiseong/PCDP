@@ -114,8 +114,6 @@ def main(output, visual, init_joints, frequency, command_latency):
                 shm_manager=shm_manager
             ) as env:
             cv2.setNumThreads(1)
-
-            cv2.namedWindow("Recording Status", cv2.WINDOW_AUTOSIZE)
             
             include_d405 = False
 
