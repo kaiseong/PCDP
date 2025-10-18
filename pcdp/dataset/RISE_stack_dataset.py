@@ -23,6 +23,7 @@ from pcdp.real_world.real_data_pc_conversion import _get_replay_buffer, PointClo
 from pcdp.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
 from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
+from pcdp.common.normalize_util import get_norm_stats_in_batch
 
 # Assuming these util/transformation files are created by the user
 from pcdp.dataset.RISE_util import *
@@ -237,19 +238,47 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         obs_grip_data = all_robot_obs[:, 6:7]
         normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
 
-        all_colors = []
-        for i in tqdm(range(self.replay_buffer.n_episodes), desc="Calculating PointCloud Color Stats"):
-            data = self.replay_buffer.get_episode(i)
-            points = data['pointcloud']
-            for pc in points:
-                if len(pc) > 0:
-                    all_colors.append(pc[:, 3:6])
+        # ========= MODIFIED: Memory-Efficient Normalization =========
+        # New code to calculate stats in batches, avoiding memory overflow.
+        color_stats = get_norm_stats_in_batch(
+            replay_buffer=self.replay_buffer,
+            key='pointcloud',
+            obs_slice=slice(3, 6),
+            device=device
+        )
         
-        if all_colors:
-            all_colors = np.concatenate(all_colors, axis=0) 
-            all_colors = torch.from_numpy(all_colors).to(device)
-            color_normalizer = SingleFieldLinearNormalizer.create_fit(all_colors, mode='gaussian')
+        if color_stats is not None:
+            # Create normalizer from calculated stats
+            color_stats_torch = {k: torch.from_numpy(v).to(device) for k, v in color_stats.items()}
+            # Add min/max for compatibility if they don't exist
+            if 'min' not in color_stats_torch:
+                color_stats_torch['min'] = torch.full_like(color_stats_torch['mean'], -1.0)
+            if 'max' not in color_stats_torch:
+                color_stats_torch['max'] = torch.full_like(color_stats_torch['mean'], 1.0)
+
+            color_normalizer = SingleFieldLinearNormalizer.create_manual(
+                scale=1.0 / (color_stats_torch['std'] + 1e-6),
+                offset=-color_stats_torch['mean'] / (color_stats_torch['std'] + 1e-6),
+                input_stats_dict=color_stats
+            )
             normalizer['pointcloud_color'] = color_normalizer
+        # ==========================================================
+
+        # ========= ORIGINAL CODE (COMMENTED OUT) =========
+        # all_colors = []
+        # for i in tqdm(range(self.replay_buffer.n_episodes), desc="Calculating PointCloud Color Stats"):
+        #     data = self.replay_buffer.get_episode(i)
+        #     points = data['pointcloud']
+        #     for pc in points:
+        #         if len(pc) > 0:
+        #             all_colors.append(pc[:, 3:6])
+        # 
+        # if all_colors:
+        #     all_colors = np.concatenate(all_colors, axis=0) 
+        #     all_colors = torch.from_numpy(all_colors).to(device)
+        #     color_normalizer = SingleFieldLinearNormalizer.create_fit(all_colors, mode='gaussian')
+        #     normalizer['pointcloud_color'] = color_normalizer
+        # =================================================
         
         return normalizer
 

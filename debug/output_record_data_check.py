@@ -170,5 +170,5 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
 if __name__ == "__main__":
     analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/please_please/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0008')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0008')
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0108')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0108')

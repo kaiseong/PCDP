@@ -93,26 +93,26 @@ def main(input, output, match_episode, frequency):
     cprint(f"Policy loaded on {device}", "green")
     
     # =========================
-    # Normalizer 설정 (재발 방지)
-    # 1) 체크포인트 폴더에 normalizer.pt가 있으면 로드
-    # 2) 없으면 학습 YAML의 translation 범위를 dataset에 강제 세팅 후 fit
+    # Normalizer 설정 (주석 처리됨)
+    # 모델 체크포인트에 정규화 정보가 이미 포함되어 있으므로, 별도로 로드하거나 계산할 필요가 없습니다.
+    # policy.load_state_dict()를 통해 모델 가중치를 로드할 때 정규화 파라미터도 함께 로드됩니다.
     # =========================
-    ckpt_dir = os.path.dirname(ckpt_path)
-    n_path = os.path.join(ckpt_dir, "normalizer.pt")
-    if os.path.exists(n_path):
-        state = torch.load(n_path, map_location=device)
-        n = LinearNormalizer(); n.load_state_dict(state)
-        policy.set_normalizer(n)
-        cprint(f"Loaded normalizer: {n_path}", "green")
-    else:
-        # ⬇️ 학습과 같은 translation 정규화 범위를 강제 (오프셋 방지)
-        cfg.task.dataset._target_ = 'pcdp.dataset.RISE_stack_dataset.RISE_RealStackPointCloudDataset'
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        if 'translation' in cfg.training:
-            dataset.set_translation_norm_config(cfg.training.translation)
-        normalizer = dataset.get_normalizer(device=device)
-        policy.set_normalizer(normalizer)
-        cprint("Built normalizer from dataset with training.translation enforced.", "green")
+    # ckpt_dir = os.path.dirname(ckpt_path)
+    # n_path = os.path.join(ckpt_dir, "normalizer.pt")
+    # if os.path.exists(n_path):
+    #     state = torch.load(n_path, map_location=device)
+    #     n = LinearNormalizer(); n.load_state_dict(state)
+    #     policy.set_normalizer(n)
+    #     cprint(f"Loaded normalizer: {n_path}", "green")
+    # else:
+    #     # ⬇️ 학습과 같은 translation 정규화 범위를 강제 (오프셋 방지)
+    #     cfg.task.dataset._target_ = 'pcdp.dataset.RISE_stack_dataset.RISE_RealStackPointCloudDataset'
+    #     dataset = hydra.utils.instantiate(cfg.task.dataset)
+    #     if 'translation' in cfg.training:
+    #         dataset.set_translation_norm_config(cfg.training.translation)
+    #     normalizer = dataset.get_normalizer(device=device)
+    #     policy.set_normalizer(normalizer)
+    #     cprint("Built normalizer from dataset with training.translation enforced.", "green")
 
     # (선택) 정규화기 중심 확인: 정규화 공간의 0이 물리공간 어디인지
     try:

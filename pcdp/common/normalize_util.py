@@ -1,6 +1,8 @@
 from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 from pcdp.common.pytorch_util import dict_apply, dict_apply_reduce, dict_apply_split
 import numpy as np
+from tqdm import tqdm
+import torch
 
 
 def get_range_normalizer_from_stat(stat, output_max=1, output_min=-1, range_eps=1e-7):
@@ -221,3 +223,36 @@ def array_to_stats(arr: np.ndarray):
         'std': np.std(arr, axis=0)
     }
     return stat
+
+def get_norm_stats_in_batch(replay_buffer, key, obs_slice, device):
+    all_data_sum = 0
+    all_data_sq_sum = 0
+    n_points = 0
+    
+    for i in tqdm(range(replay_buffer.n_episodes), desc=f"Calculating Stats for {key}"):
+        data = replay_buffer.get_episode(i)
+        points = data[key]
+        for pc in points:
+            if len(pc) > 0:
+                pc_tensor = torch.from_numpy(pc[:, obs_slice]).to(dtype=torch.float64, device=device)
+                all_data_sum += torch.sum(pc_tensor, dim=0)
+                all_data_sq_sum += torch.sum(torch.square(pc_tensor), dim=0)
+                n_points += len(pc_tensor)
+
+    if n_points > 0:
+        mean = (all_data_sum / n_points).to(dtype=torch.float32)
+        std = torch.sqrt((all_data_sq_sum / n_points) - torch.square(mean)).to(dtype=torch.float32)
+        std[std < 1e-6] = 1.0 # prevent division by zero
+    else:
+        # Fallback if no data
+        # Should determine the dimension from shape_meta if possible
+        # For now, assuming a fallback dimension if needed, e.g., 3 for color
+        sample_data = replay_buffer.get_episode(0)[key][0]
+        fallback_dim = sample_data[:, obs_slice].shape[1]
+        mean = torch.zeros(fallback_dim, device=device, dtype=torch.float32)
+        std = torch.ones(fallback_dim, device=device, dtype=torch.float32)
+
+    return {
+        'mean': mean.cpu().numpy(),
+        'std': std.cpu().numpy()
+    }
