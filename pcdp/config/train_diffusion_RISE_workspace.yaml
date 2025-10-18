@@ -59,8 +59,8 @@ training:
   seed: 233
   debug: False
   resume: True
-  lr_warmup_steps: 1000
-  num_epochs: 1000
+  lr_warmup_steps: 2000
+  num_epochs: 2000
   use_ema: False
   rollout_every: 5
   save_epochs: 100
@@ -77,7 +77,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "SIMPLE_RISE_${now:%Y.%m.%d}"
+  name: "RISE_${now:%Y.%m.%d}"
   project: Test_2
   resume: true
   tags:

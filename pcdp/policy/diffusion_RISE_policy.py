@@ -64,7 +64,7 @@ class RISEPolicy(BasePointCloudPolicy):
                 action_rot = actions[:, :, 3:9]
                 action_grip = actions[:, :, 9:10]
                 norm_action_trans = self.normalizer['action_translation'].normalize(action_trans)
-                norm_action_grip = (action_grip > 0.5) * 2 - 1 # Binarize and map to -1, 1
+                norm_action_grip = self.normalizer['action_gripper'].normalize(action_grip)
                 actions = torch.cat([norm_action_trans, action_rot, norm_action_grip], dim=-1)
         
         src, pos, src_padding_mask = self.sparse_encoder(cloud, batch_size = batch_size)
@@ -81,9 +81,8 @@ class RISEPolicy(BasePointCloudPolicy):
                 action_trans = action_pred[:, :, :3]
                 action_rot = action_pred[:, :, 3:9]
                 action_grip = action_pred[:, :, 9:10]
-
                 unnorm_action_trans = self.normalizer['action_translation'].unnormalize(action_trans)
-                unnorm_action_grip = (action_grip > 0).float()
+                unnorm_action_grip = self.normalizer['action_gripper'].unnormalize(action_grip)
 
                 action_pred = torch.cat([unnorm_action_trans, action_rot, unnorm_action_grip], dim=-1)
             
