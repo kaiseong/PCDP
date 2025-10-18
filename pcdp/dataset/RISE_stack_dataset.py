@@ -238,6 +238,10 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         obs_grip_data = all_robot_obs[:, 6:7]
         normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
 
+        all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+        action_grip_data = all_actions[:, 6:7]
+        normalizer['action_gripper'] = SingleFieldLinearNormalizer.create_fit(action_grip_data)
+
         # ========= MODIFIED: Memory-Efficient Normalization =========
         # New code to calculate stats in batches, avoiding memory overflow.
         color_stats = get_norm_stats_in_batch(
@@ -259,7 +263,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             color_normalizer = SingleFieldLinearNormalizer.create_manual(
                 scale=1.0 / (color_stats_torch['std'] + 1e-6),
                 offset=-color_stats_torch['mean'] / (color_stats_torch['std'] + 1e-6),
-                input_stats_dict=color_stats
+                input_stats_dict=color_stats_torch
             )
             normalizer['pointcloud_color'] = color_normalizer
         # ==========================================================

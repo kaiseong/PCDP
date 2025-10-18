@@ -207,6 +207,10 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         obs_grip_data = all_robot_obs[:, 6:7]
         normalizer['obs_gripper'] = SingleFieldLinearNormalizer.create_fit(obs_grip_data)
 
+        all_actions = torch.from_numpy(self.replay_buffer['action'][:]).to(device)
+        action_grip_data = all_actions[:, 6:7]
+        normalizer['action_gripper'] = SingleFieldLinearNormalizer.create_fit(action_grip_data)
+
         all_colors = []
         for i in tqdm(range(self.replay_buffer.n_episodes), desc="Calculating PointCloud Color Stats"):
             data = self.replay_buffer.get_episode(i)
