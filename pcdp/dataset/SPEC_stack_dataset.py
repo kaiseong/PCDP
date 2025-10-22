@@ -1,4 +1,4 @@
-# SCDP_stack_dataset.py
+# SPEC_stack_dataset.py
 from typing import Dict, List
 import torch
 import numpy as np
@@ -26,74 +26,7 @@ from pcdp.model.common.normalizer import SingleFieldLinearNormalizer
 from tqdm import tqdm
 from pcdp.common.RISE_transformation import xyz_rot_transform
 
-import pathlib import Path
-import torch.nn.functional as F
-
-from pcdp.dataset.goal_target_miner import mine_episode_targets
-from pcdp.model.vision.Sparse3DEncoder import Sparse3DEncoder
-
-
-def masked_mean_tokens(tokens: torch.Tensor,
-                       pad_mask: torch.Tensor) -> torch.Tensor:
-    """
-    token -> frame embedding (L2 Normalize), 참고: 캐시는 오프라인에서 생성되므로 여기서는 런타임 사용 X
-    tokens: [B, Ttok, D], pad_mask: [B, Ttok] (true=pad)
-    """
-    valid = (~pad_mask).float()
-    denom = valid.sum(1, keepdim=True).clamp_min(1.0)
-    z = (tokens * valid.unsqueeze(-1)).sum(1) / denom
-    return F.normalize(z, dim=-1)
-
-def _encoder_fingerprint(enc: nn.Module) -> str:
-    """ snap shot-cashe 일관성 확인용 간단 finger print(모양 / 평균값 기반)"""
-    h = hashlib.sha256()
-    for n, p in enc.named_parameters():
-        h.update(n.encode())
-        h.update(str(tuple(p.shape)).encode())
-        # simply use only mean value
-        mean_val = float(p.data.mean().cpu().item())
-        h.update(np.float64(mean_val).tobytes())
-    return h.hexdigest()[:16]
-
-class _GoalTargetCache:
-    """
-    에피소드별 목표 임베딩/소프트 prior loader
-    - 구조 <root>/<ep_name>/{z_g3.pt, prior.pt, meta.json}
-    - meta.json: {"z_dim": D, 
-                    "encoder_fingerprint": "...",
-                    "window":...,
-                    "edge_width":...,
-                    "label_smoothing":...
-                    }
-    """
-    def __init__(self, root: Path, required=True):
-        self.root = Path(root)
-        self.required = required
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._mem={} # ep_name -> (z_g3[T=3, D], prior[T,3], meta:dict)
-    
-    def get(self, ep_name:str):
-        if ep_name in self._mem:
-            return self._mem[ep_name]
-        ep_dir = self.root / ep_name
-        z_g3_p = ep_dir / "z_g3.pt"
-        prior_p = ep_dir / "prior.pt"
-        meta_p = ep_dir / "meta.json"
-        if not (z_g3_p.exists() and prior_p.exists() and meta_p.exists()):
-            if self.required:
-                raise FileNotFoundError(f"[GoalCahe] Missing targets for episode '{ep_name}' under {ep_dir}")
-            else:
-                return None
-        
-        z_g3 = torch.load(z_g3_p, map_location='cpu') # [3, D]
-        prior = torch.load(prior_p, map_location="cpu") # [T, 3]
-        meta = json.loads(meta_p.read_text())
-        self._mem[ep_name] = (z_g3, prior, meta)
-        return self._mem[ep_name]
-
-
-
-class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
+class SPEC_RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
             dataset_path: str,
@@ -111,13 +44,6 @@ class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
             pc_preprocessor_config=None,
             enable_low_dim_preprocessing=True,
             low_dim_preprocessor_config=None,
-            # ------ adding --------------
-            use_goal_cache: bool = True,
-            goal_cache_dir: str | None = None,
-            encoder_ckpt: str | None = None,
-            goal_window: int = 3,
-            edge_width: int = 2,
-            label_smoothing: float = 0.1,
         ):
 
         super().__init__() 
@@ -175,8 +101,6 @@ class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
             for key in pointcloud_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
         
-        key_first_k['occlusion'] = horizon + n_latency_steps
-
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
@@ -211,33 +135,6 @@ class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         self.n_latency_steps = n_latency_steps
         self.normalizer = None
         self.translation_norm_config = None
-        
-        # -------- [Goal 캐시/엔코더 스냅샷 준비] ---------
-        self.use_goal_cache = use_goal_cache
-        self.goal_window = int(goal_window)
-        self.edge_width = int(edge_width)
-        self.label_smoothing = float(label_smoothing)
-
-        # cache root
-        cache_root = goal_cache_dir or (os.path.joint(dataset_path, "goal_cache"))
-        self._goal_cache = _GoalTargetCache(Path(cache_root), required=use_goal_cache)
-
-        # snapshot fingerprint load (validation meta)
-        self._enc_fingerprint = None
-        if encoder_ckpt is not None:
-            try:
-                enc = Sparse3DEncoder()
-                ckpt = torch.load(encoder_ckpt, map_location="cpu")
-                sd = ckpt.get("state_dict", ckpt)
-                enc.load_state_dict(sd, strict=False)
-                for p in enc.parameters():
-                    p.requires_grad = False
-                enc.eval()
-                self._enc_fingerprint = _encoder_fingerprint(enc)
-                del enc
-            except Exception as e:
-                print(f"[WARN] encoder_ckpt fingerprint build failed: {e}")
-
 
     def set_translation_norm_config(self, config):
         self.translation_norm_config = config
@@ -358,7 +255,9 @@ class SCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         input_coords_list = []
         input_feats_list = []
         for cloud in clouds:
-            coords = np.ascontiguousarray(cloud[:, :3] / self.voxel_size, dtype=np.int32)
+            coords = np.floor(cloud[:, :3] / self.voxel_size).astype(np.int32, copy=False)
+            coords = np.ascontiguousarray(coords)
+            
             # Return unnormalized RGB in features
             input_feats_list.append(cloud.astype(np.float32))
             input_coords_list.append(coords)

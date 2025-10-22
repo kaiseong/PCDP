@@ -1,4 +1,4 @@
-# real_data_pc_conversion.py
+# spectrum_data_conversion.py
 from typing import Sequence, Tuple, Dict, Optional, Union, List
 import os
 import pathlib
@@ -6,8 +6,9 @@ import numpy as np
 import zarr
 import numcodecs
 from tqdm import tqdm
-
+import open3d as o3d
 import torch
+import pcdp.common.mono_time as mono_time
 try:
     import pytorch3d.ops as torch3d_ops
     PYTORCH3D_AVAILABLE = True
@@ -16,6 +17,7 @@ except ImportError:
     print("Warning: pytorch3d not available. FPS will use fallback method.")
 from pcdp.common import RISE_transformation as rise_tf
 from pcdp.common.replay_buffer import ReplayBuffer, get_optimal_chunks
+from pcdp.common.RISE_transformation import xyz_rot_transform
 
 robot_to_base = np.array([
     [1., 0., 0., -0.04],
@@ -26,18 +28,25 @@ robot_to_base = np.array([
 
 class PointCloudPreprocessor:
     """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
+    
     def __init__(self, 
-                extrinsics_matrix=None,
-                workspace_bounds=None,
-                rgb_mean=None,
-                rgb_std=None,
+                enable_sampling=False,
                 target_num_points=1024,
                 enable_transform=True,
+                extrinsics_matrix=None,
                 enable_cropping=True,
-                enable_sampling=True,
-                enable_normalize=True,
+                workspace_bounds=None,
+                enable_filter=False,
+                nb_points=10,
+                sor_std=1.7,
                 use_cuda=True,
-                verbose=False):
+                verbose=False,
+                enable_temporal=False,
+                temporal_voxel_size=0.005,
+                temporal_alpha=0.80,      # per-frame decay
+                temporal_c_min=0.10,      # drop threshold
+                temporal_max_points=None, # optional budget
+                ):
         """
         Initialize pointcloud preprocessor.
         
@@ -65,30 +74,24 @@ class PointCloudPreprocessor:
         # Default workspace bounds
         if workspace_bounds is None:
             self.workspace_bounds = [
-                [-0.000, 0.740],    # X range (m)
+                [-0.000, 0.715],    # X range (m)
                 [-0.400, 0.350],    # Y range (m)
                 [-0.100, 0.400]     # z range
             ]
         else:
             self.workspace_bounds = workspace_bounds
         
-        if rgb_mean is None:
-            self.rgb_mean = np.array([0.1234, 0.1234, 0.1234])
-        else:
-            self.rgb_mean=rgb_mean
-
-        if rgb_std is None:
-            self.rgb_std = np.array([0.2620, 0.2710, 0.2709])
-        else:
-            self.rgb_std=rgb_std
             
         self.target_num_points = target_num_points
+        self.nb_points = nb_points
+        self.sor_std = sor_std
         self.enable_transform = enable_transform
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
-        self.enable_normalize = enable_normalize
+        self.enable_filter = enable_filter
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
+
         
         if self.verbose:
             print(f"PointCloudPreprocessor initialized:")
@@ -118,27 +121,19 @@ class PointCloudPreprocessor:
         # Ensure points is float32
         points = points.astype(np.float32)
 
-        if self.enable_normalize:
-            points = self._apply_normalize(points)
         # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
         # Workspace cropping
         if self.enable_cropping:
             points = self._crop_workspace(points)
+        if self.enable_filter:
+            points = self._apply_filter(points)
         # Point FPS sampling
         if self.enable_sampling:
             points = self._sample_points(points)
         return points
 
-    def _apply_normalize(self, points):
-        points[:, 3:6] = points[:, 3:6] / 255.0
-        points[:, 3:6] = (points[:, 3:6] - self.rgb_mean) / self.rgb_std
-
-        if self.verbose and len(points) > 0:
-            print(f"mean: {points[:, 3:6].mean()}")
-
-        return points
     def _apply_transform(self, points):
         """Apply extrinsics transformation and scaling."""
         # Scale from mm to m (Orbbec specific)
@@ -177,6 +172,14 @@ class PointCloudPreprocessor:
             print(f"After cropping: {len(cropped_points)}/{len(points)} points remain")
             
         return cropped_points
+
+    def _apply_filter(self, points):
+        if len(points) == 0:
+            raise ValueError("points empty")
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+        _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
+        return points[ind]
         
     def _sample_points(self, points):
         """Apply farthest point sampling to reduce number of points."""
@@ -240,6 +243,51 @@ class PointCloudPreprocessor:
             sampled_points = sampled_points.cpu()
             
         return sampled_points.numpy(), indices
+
+class LowDimPreprocessor:
+    def __init__(self,
+                 robot_to_base=None
+                ):
+        if robot_to_base is None:
+            self.robot_to_base=np.array([
+                [1., 0., 0., -0.04],
+                [0., 1., 0., -0.29],
+                [0., 0., 1., -0.03],
+                [0., 0., 0.,  1.0]
+            ])
+        else:
+            self.robot_to_base = np.array(robot_to_base, dtype=np.float32)
+        
+    
+    def TF_process(self, robot_7ds):
+        assert robot_7ds.shape[-1] == 7, f"robot_7ds data shape shoud be (..., 7), but got {robot_7ds.shape}"
+        processed_robot7d = []
+        for robot_7d in robot_7ds:
+            pose_6d = robot_7d[:6]
+            gripper = robot_7d[6]
+            
+            translation = pose_6d[:3]
+            rotation = pose_6d[3:6]
+            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
+            T_k_matrix = self.robot_to_base @ eef_to_robot_base_k
+            transformed_pose_6d = rise_tf.mat_to_xyz_rot(
+                T_k_matrix,
+                rotation_rep='euler_angles',
+                rotation_rep_convention='ZYX'
+            )
+            new_robot_7d = np.concatenate([transformed_pose_6d, [gripper]])
+            processed_robot7d.append(new_robot_7d)
+        
+        return np.array(processed_robot7d, dtype=np.float32)
+
+
+
+
+
+        
+
+
+
 
 
 def create_default_preprocessor(target_num_points=1024, use_cuda=True, verbose=False):
@@ -322,13 +370,14 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
 
 
 
-def process_single_episode(episode_path, preprocessor=None, downsample_factor=3):
+def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, downsample_factor=3):
     """
     Process a single episode: load, downsample, align, and optionally preprocess.
     
     Args:
         episode_path: Path to episode directory
-        preprocessor: Optional PointCloudPreprocessor instance
+        pc_preprocessor: Optional PointCloudPreprocessor instance
+        lowdim_preprocessor: Optional LowDimPreprocessor instance
         downsample_factor: Factor for downsampling obs data
         
     Returns:
@@ -364,40 +413,29 @@ def process_single_episode(episode_path, preprocessor=None, downsample_factor=3)
         downsampled_obs, action_data, 
         downsampled_obs_timestamps, action_timestamps)
     
+    
     if len(valid_indices) == 0:
         return None
         
     # Apply pointcloud preprocessing if provided
-    if preprocessor is not None and 'pointcloud' in aligned_obs:
+    if pc_preprocessor is not None and 'pointcloud' in aligned_obs:
         processed_pointclouds = []
         for pc in aligned_obs['pointcloud']:
-            processed_pc = preprocessor.process(pc)
+            processed_pc = pc_preprocessor.process(pc)
             processed_pointclouds.append(processed_pc)
         aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
     
-    if preprocessor is not None:
-        original_actions = aligned_action['action']
-        processed_actions = []
-        
-        for action_7d in original_actions:
-            pose_6d = action_7d[:6]
-            gripper = action_7d[6]
+    
+    # Create robot_obs by concatenating pose and gripper width
+    robot_eef_pose = aligned_obs['robot_eef_pose']
+    robot_gripper_width = aligned_obs['robot_gripper'][:, :1] # Keep it as a column vector
+    aligned_obs['robot_obs'] = np.concatenate([robot_eef_pose, robot_gripper_width], axis=1) 
+    
 
-            translation = pose_6d[:3]
-            rotation = pose_6d[3:6]
-            eef_to_robot_base_k = rise_tf.rot_trans_mat(translation, rotation)
-
-            T_k_matrix = robot_to_base @ eef_to_robot_base_k
-            transformed_pose_6d = rise_tf.mat_to_xyz_rot(
-                T_k_matrix,
-                rotation_rep='euler_angles',
-                rotation_rep_convention='XYZ'
-            )
-
-            new_action_7d = np.concatenate([transformed_pose_6d, [gripper]])
-            processed_actions.append(new_action_7d)
-        
-        aligned_action['action'] = np.array(processed_actions, dtype=np.float32)
+    # TF to based on origin frames
+    if lowdim_preprocessor is not None:
+        aligned_obs['robot_obs'] = lowdim_preprocessor.TF_process(aligned_obs['robot_obs'])
+        aligned_action['action'] = lowdim_preprocessor.TF_process(aligned_action['action'])
     
     # Combine obs and action data
     episode_data = {}
@@ -508,7 +546,8 @@ def _get_replay_buffer(
         dataset_path: str,
         shape_meta: dict,
         store: Optional[zarr.ABSStore] = None,
-        preprocessor: Optional[PointCloudPreprocessor] = None,
+        pc_preprocessor: Optional[PointCloudPreprocessor] = None,
+        lowdim_preprocessor: Optional[LowDimPreprocessor] = None,
         downsample_factor: int = 3,
         max_episodes: Optional[int] = None,
         n_workers: int = 1
@@ -520,7 +559,8 @@ def _get_replay_buffer(
         dataset_path: Path to recorder_data directory containing episode folders
         shape_meta: Dictionary defining observation and action shapes/types
         store: Zarr store for output (if None, uses MemoryStore)
-        preprocessor: Optional pointcloud preprocessor
+        pc_preprocessor: Optional pointcloud preprocessor
+        lowdim_preprocessor: Optional lowdim preprocessor
         downsample_factor: Factor for downsampling obs data (30Hz -> 10Hz = 3)
         max_episodes: Maximum number of episodes to process
         n_workers: Number of worker processes (currently unused)
@@ -565,11 +605,16 @@ def _get_replay_buffer(
         for episode_dir in episode_dirs:
             try:
                 episode_data = process_single_episode(
-                    episode_dir, preprocessor, downsample_factor)
+                    episode_dir, pc_preprocessor, lowdim_preprocessor, downsample_factor)
                 
                 if episode_data is not None:
                     # Validate episode data against shape_meta
                     if validate_episode_data_with_shape_meta(episode_data, shape_meta):
+                        # Ensure all data are numpy arrays before adding to buffer
+                        for key in episode_data.keys():
+                            if isinstance(episode_data[key], list):
+                                episode_data[key] = np.asarray(episode_data[key])
+                        
                         # Add episode to replay buffer
                         replay_buffer.add_episode(episode_data,
                             object_codecs={'pointcloud': numcodecs.Pickle()})

@@ -1,4 +1,4 @@
-# diffusion_SCDP_policy.py
+# diffusion_SPEC_policy.py
 import copy
 import torch
 import torch.nn as nn
@@ -12,11 +12,11 @@ from pcdp.policy.RISE_transformer import Transformer
 import MinkowskiEngine as ME
 from pcdp.model.common.normalizer import LinearNormalizer
 
-class SCDPPolicy(BasePointCloudPolicy):
+class SPECPolicy(BasePointCloudPolicy):
     def __init__(
             self,
             num_action = 20,
-            input_dim = 6,
+            input_dim = 7,
             obs_feature_dim = 512,
             action_dim = 10,
             hidden_dim = 512,
@@ -24,15 +24,15 @@ class SCDPPolicy(BasePointCloudPolicy):
             num_encoder_layers = 4,
             num_decoder_layers = 1,
             dim_feedforward = 2048,
-            dropout = 0.1,
-            use_s_offset_embedding: bool = True,
+            dropout = 0.1
     ):
         super().__init__()
         num_obs = 1
         robot_obs_dim = 10
-        self.sparse_encoder = Sparse3DEncoder(input_dim, obs_feature_dim)
+        self.sparse_encoder = Sparse3DEncoder(input_dim, output_dim=obs_feature_dim)
         self.transformer = Transformer(hidden_dim, nheads, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout)
         self.action_decoder = DiffusionUNetPolicy(action_dim, num_action, num_obs, obs_feature_dim + robot_obs_dim)
+        # self.action_decoder = DiffusionUNetPolicy(action_dim, num_action, num_obs, obs_feature_dim)
         self.readout_embed = nn.Embedding(1, hidden_dim)
         self.normalizer = LinearNormalizer()
         # policy
@@ -44,23 +44,6 @@ class SCDPPolicy(BasePointCloudPolicy):
             nn.Linear(obs_feature_dim, obs_feature_dim) # 512 -> 512
         )
 
-        self.use_s_offset_embedding=use_s_offset_embedding
-        self.d_model = obs_feature_dim
-        self.action_dim = action_dim
-        self.s_embed = nn.Embedding(2, obs_feature_dim)
-        self.s_to_obs = nn.Identity()
-
-        self.latency_head = nn.Sequential(
-            nn.LayerNorm(obs_feature_dim),
-            nn.Linear(obs_feature_dim, obs_feature_dim//2),
-            nn.SiLU(),
-            nn.Linear(obs_feature_dim//2, 2)
-        )
-        self.ptp_head == nn.Sequential(
-            nn.LayerNorm(obs_feature_dim),
-            nn.Linear(obs_feature_dim, 2*action_dim)
-        )
-
 
 
 
@@ -68,7 +51,7 @@ class SCDPPolicy(BasePointCloudPolicy):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
 
-    def forward(self, cloud: ME.SparseTensor, actions=None, robot_obs=None, batch_size=24, return_latency: bool=False, s_index: torch.LongTensor|None=None):
+    def forward(self, cloud: ME.SparseTensor, actions=None, robot_obs=None, batch_size=24):
         dev = cloud.F.device if hasattr(cloud, "F") else cloud.device
         # normalizer 디바이스 정렬 (방어적)
         if self.normalizer is not None:
@@ -80,11 +63,12 @@ class SCDPPolicy(BasePointCloudPolicy):
         if self.normalizer is not None:
             # Normalize point cloud colors
             cloud_feats = cloud.F
-            cloud_colors = cloud_feats[:, 3:]
+            cloud_colors = cloud_feats[:, 3:6]
+            confidence = cloud_feats[:, 6:7]
             norm_colors = self.normalizer['pointcloud_color'].normalize(cloud_colors)
             # Create new sparse tensor with normalized colors
             cloud = ME.SparseTensor(
-                features=torch.cat([cloud_feats[:, :3], norm_colors], dim=1),
+                features=torch.cat([cloud_feats[:, :3], norm_colors, confidence], dim=1),
                 coordinates=cloud.C,
                 device=cloud.device
             )
@@ -114,33 +98,22 @@ class SCDPPolicy(BasePointCloudPolicy):
 
         src, pos, src_padding_mask = self.sparse_encoder(cloud, batch_size = batch_size)
         readout = self.transformer(src, src_padding_mask, self.readout_embed.weight, pos)[-1] # [B, 1, 512]
-        readout_raw = readout[:, 0, :]  # [B,512]  (대조 q는 이걸 사용)
+        readout_raw = readout[:, 0, :]  # [B,512] 
         
-        cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
+        
+        global_cond = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
+        # cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
         # global_cond = self.cond_proj(cond_in)
         
-        B = batch_size
-        To = 1
-        global_cond = cond_in.reshape[B, -1]
-        logits_s = self.latency_head(global_cond)
-        ptp_flat = self.ptp_head(global_cond)
-        ptp_pred = ptp_flat.view(B, 2, self.action_dim)
-
-        if self.use_s_offset_embedding and s_index is not None:
-            s_idx = torch.clamp(s_index -1, 0, 1)
-            s_emb = self.s_embed(s_idx)
-            s_emb_obs = self.s_to_obs(s_emb)
-            s_add = s_emb_obs.repeat_interleave(To, dim=0)
-            cond_in = cond_in + s_add
         
         if actions is not None:
             # training mode
-            loss = self.action_decoder.compute_loss(cond_in, actions)
+            loss = self.action_decoder.compute_loss(global_cond, actions)
             return loss
         else:
             # inference mode
             with torch.no_grad():
-                action_pred = self.action_decoder.predict_action(cond_in)
+                action_pred = self.action_decoder.predict_action(global_cond)
 
             # un-normalize action prediction
             if self.normalizer is not None:
@@ -149,14 +122,8 @@ class SCDPPolicy(BasePointCloudPolicy):
                 action_grip = action_pred[:, :, 9:10]
 
                 unnorm_action_trans = self.normalizer['action_translation'].unnormalize(action_trans)
-                unnorm_action_grip = (action_grip > 0).float()
+                unnorm_action_grip = self.normalizer['action_gripper'].unnormalize(action_grip)
 
                 action_pred = torch.cat([unnorm_action_trans, action_rot, unnorm_action_grip], dim=-1)
-            
-            if return_latency:
-                if self.training:
-                    return action_pred, logits_s, ptp_pred
-                else:
-                    return action_pred, logits_s
-            else:
-                return action_pred
+
+            return action_pred

@@ -8,6 +8,7 @@ import numcodecs
 from tqdm import tqdm
 import open3d as o3d
 import torch
+import pcdp.common.mono_time as mono_time
 try:
     import pytorch3d.ops as torch3d_ops
     PYTORCH3D_AVAILABLE = True
@@ -26,8 +27,11 @@ robot_to_base = np.array([
 ])
 
 class PointCloudPreprocessor:
-    """Pointcloud preprocessing class with coordinate transformation, cropping, and sampling."""
-    
+    """Pointcloud preprocessing with optional temporal memory for fused cache export.
+    When enable_temporal=True and export_mode='fused', each call to `process(points)`
+    updates a stateful voxel map (per episode) with exponential decay and returns
+    an Nx7 array: [x,y,z,r,g,b,c], where `c` is temporal confidence (recency).
+    """
     def __init__(self, 
                 enable_sampling=False,
                 target_num_points=1024,
@@ -36,23 +40,18 @@ class PointCloudPreprocessor:
                 enable_cropping=True,
                 workspace_bounds=None,
                 enable_filter=False,
-                nb_points=15,
+                nb_points=10,
                 sor_std=1.7,
                 use_cuda=True,
-                verbose=False):
-        """
-        Initialize pointcloud preprocessor.
-        
-        Args:
-            extrinsics_matrix: 4x4 transformation matrix from camera to robot coordinates
-            workspace_bounds: [[x_min, x_max], [y_min, y_max], [z_min, z_max]]
-            target_num_points: Target number of points after sampling
-            enable_transform: Whether to apply coordinate transformation
-            enable_cropping: Whether to crop to workspace
-            enable_sampling: Whether to apply farthest point sampling
-            use_cuda: Whether to use GPU acceleration
-            verbose: Whether to print debug information
-        """
+                verbose=False,
+                enable_temporal=False,
+                export_mode='off',
+                temporal_voxel_size=0.005,
+                temporal_decay=0.90,
+                temporal_c_min=0.20,
+                temporal_max_points=None,
+                ):
+
         # Default extrinsics matrix (camera to robot transform)
         if extrinsics_matrix is None:
             self.extrinsics_matrix = np.array([
@@ -85,6 +84,17 @@ class PointCloudPreprocessor:
         self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
         self.verbose = verbose
         
+        # temporal memory
+        self.enable_temporal = enable_temporal
+        self.export_mode = export_mode
+        self._temporal_voxel_size = float(temporal_voxel_size)
+        self._temporal_decay = float(temporal_decay)
+        self._temporal_c_min = float(temporal_c_min)
+        self._temporal_max_points = temporal_max_points
+        
+        self._frame_idx = 0
+        self._mem = {}
+
         if self.verbose:
             print(f"PointCloudPreprocessor initialized:")
             print(f"  - Transform: {self.enable_transform}")
@@ -95,6 +105,38 @@ class PointCloudPreprocessor:
     def __call__(self, points):
         """Process pointcloud through the full pipeline."""
         return self.process(points)
+    
+    def reset_temporal(self):
+        """Call at the start of each episode."""
+        self._mem.clear()
+        self._frame_idx = 0
+
+    def _key_from_xyz(self, xyz: np.ndarray):
+        return tuple(np.floor(xyz / self._temporal_voxel_size).astype(np.int32).tolist())
+
+    def _decay_and_prune(self, now_step: int):
+        if not self._mem: 
+            return
+        drop = []
+        for k, (xyz, rgb, c, s) in self._mem.items():
+            dt = max(0, now_step - s)
+            c_new = self._temporal_decay ** dt
+            if c_new < self._temporal_c_min:
+                drop.append(k)
+            else:
+                self._mem[k] = (xyz, rgb, c_new, s)
+        for k in drop:
+            self._mem.pop(k, None)
+    
+    def _export_array_from_mem(self) -> np.ndarray:
+        if not self._mem:
+            return np.zeros((0,7), dtype=np.float32)
+        arr = np.asarray([[*xyz, *rgb, c] for (xyz, rgb, c, _) in self._mem.values()], dtype=np.float32)
+        # optional global budget
+        if self._temporal_max_points is not None and len(arr) > self._temporal_max_points:
+            idx = np.random.choice(len(arr), self._temporal_max_points, replace=False)
+            arr = arr[idx]
+        return arr
         
     def process(self, points):
         """
@@ -107,7 +149,11 @@ class PointCloudPreprocessor:
             processed_points: numpy array of processed pointcloud
         """
         import pcdp.common.mono_time as mono_time
-        if len(points) == 0:
+        if points is None or len(points) == 0:
+            # temporal 켜져 있으면 (0,7), 아니면 기존처럼 (target_num_points, 6)
+            if self.enable_temporal and self.export_mode == 'fused':
+                self._frame_idx += 1
+                return np.zeros((0,7), dtype=np.float32)
             return np.zeros((self.target_num_points, 6), dtype=np.float32)
             
         # Ensure points is float32
@@ -121,10 +167,31 @@ class PointCloudPreprocessor:
             points = self._crop_workspace(points)
         if self.enable_filter:
             points = self._apply_filter(points)
-        # Point FPS sampling
-        if self.enable_sampling:
-            points = self._sample_points(points)
-        return points
+        if not self.enable_temporal or self.export_mode=="off":
+            # Point FPS sampling
+            if self.enable_sampling:
+                points = self._sample_points(points)
+            return points
+        
+        now_step = self._frame_idx
+        self._decay_and_prune(now_step)
+
+        for i in range(len(points)):
+            xyz = points[i, :3]
+            rgb = points[i, 3:6]
+            k = self._key_from_xyz(xyz)
+            self._mem[k] = (xyz.copy(), rgb.copy(), 1.0, now_step)
+        
+        out = self._export_array_from_mem()
+
+        if self._mem:
+            drop = [k for k, (xyz, rgb, c, s) in self._mem.items() if c < self._temporal_c_min]
+            for k in drop:
+                self._mem.pop(k, None)
+        
+        self._frame_idx += 1
+        return out
+
 
     def _apply_transform(self, points):
         """Apply extrinsics transformation and scaling."""
@@ -241,7 +308,7 @@ class LowDimPreprocessor:
                  robot_to_base=None
                 ):
         if robot_to_base is None:
-            np.array([
+            self.robot_to_base=np.array([
                 [1., 0., 0., -0.04],
                 [0., 1., 0., -0.29],
                 [0., 0., 1., -0.03],
@@ -271,13 +338,6 @@ class LowDimPreprocessor:
             processed_robot7d.append(new_robot_7d)
         
         return np.array(processed_robot7d, dtype=np.float32)
-
-
-
-
-
-        
-
 
 
 
@@ -377,6 +437,9 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     """
 
     episode_path = pathlib.Path(episode_path)
+
+    if pc_preprocessor is not None and hasattr(pc_preprocessor, "reset_temporal"):
+        pc_preprocessor.reset_temporal()
     
     obs_zarr_path = episode_path / 'obs_replay_buffer.zarr'
     action_zarr_path = episode_path / 'action_replay_buffer.zarr'

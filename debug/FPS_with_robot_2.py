@@ -6,14 +6,8 @@ from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowD
 import pcdp.common.mono_time as mono_time
 from piper_sdk import *
 import time
-import pinocchio as pin
 from pcdp.common import RISE_transformation as rise_tf
 
-
-
-URDF_PATH = "/home/moai/pcdp/dependencies/piper_description/urdf/piper_no_gripper_description.urdf"
-MESH_DIRS = ["/home/moai/pcdp/dependencies"]
-EEF_FRAME_NAME = "link6" 
 
 robot_to_base = np.array([
     [1., 0., 0., -0.04],
@@ -39,11 +33,6 @@ def main():
     time.sleep(0.5)
     piper.EnableArm(7)
     time.sleep(1.0)
-
-    # Pinocchio 로봇 로드
-    robot = RobotWrapper.BuildFromURDF(URDF_PATH, MESH_DIRS)
-    model, data = robot.model, robot.data
-    fid = model.getFrameId(EEF_FRAME_NAME)
 
     # orbbec setting
     pipeline = ob.Pipeline()

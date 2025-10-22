@@ -19,7 +19,7 @@ from pathlib import Path
 import open3d as o3d
 from pcdp.common.replay_buffer import ReplayBuffer
 import time
-from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 from pcdp.common import RISE_transformation as rise_tf
 import csv
 
@@ -88,6 +88,8 @@ def point_cloud_visualize(obs_episode):
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
                                         enable_filter=False)
+    low_preprocess = LowDimPreprocessor()
+
     pts_seq = obs_episode['pointcloud']
     if len(pts_seq) == 0:
         print("시각화할 포인트 클라우드 데이터가 없습니다.")
@@ -169,6 +171,6 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
     point_cloud_visualize(obs_episode)
 
 if __name__ == "__main__":
-    analyzer = EpisodeAnalyzer("/home/moai/pcdp/data/please_please/recorder_data")
+    analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/please_please/recorder_data")
     obs_buffer, action_buffer = analyzer.load_episode('episode_0108')
     analyze_episode_quality(obs_buffer, action_buffer, 'episode_0108')
