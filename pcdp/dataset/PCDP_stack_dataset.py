@@ -257,7 +257,8 @@ class PCDP_RealStackPointCloudDataset(BasePointCloudDataset):
         input_coords_list = []
         input_feats_list = []
         for cloud in clouds:
-            coords = np.ascontiguousarray(cloud[:, :3] / self.voxel_size, dtype=np.int32)
+            coords = np.floor(cloud[:, :3] / self.voxel_size).astype(np.int32)
+            coords = np.ascontiguousarray(coords)
             # Return unnormalized RGB in features
             input_feats_list.append(cloud.astype(np.float32))
             input_coords_list.append(coords)

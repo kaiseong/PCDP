@@ -1,9 +1,9 @@
-# PCDP_stack.yaml
-name: PCDP_stack
+# SPEC_stack.yaml
+name: SPEC_stack
 
 # 368640
 pointcloud_shape: [92160, 6]  # max_points, XYZRGB
-dataset_path: data/please/recorder_data
+dataset_path: data/please_please/recorder_data
 
 shape_meta: &shape_meta
   # acceptable types: pointcloud, low_dim
@@ -23,10 +23,10 @@ shape_meta: &shape_meta
 
 
 env_runner:
-  _target_: pcdp.env_runner.PCDP_runner.PCDPPointCloudRunner
+  _target_: pcdp.env_runner.SPEC_runner.SPECPointCloudRunner
 
 dataset:
-  _target_: pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset
+  _target_: pcdp.dataset.SPEC_stack_dataset.SPEC_RealStackPointCloudDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
   horizon: ${horizon}
@@ -47,15 +47,15 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_filter: False
-    nb_points: 15
+    enable_filter: True
+    nb_points: 10
     sor_std: 1.7
     use_cuda: True
     verbose: False
     enable_temporal: True
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}
-    temporal_decay: 0.90
+    temporal_decay: 0.80
     temporal_c_min: 0.20
     # temporal_max_points: 500000
 

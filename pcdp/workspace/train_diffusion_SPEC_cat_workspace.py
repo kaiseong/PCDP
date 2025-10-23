@@ -1,4 +1,4 @@
-# train_diffusion_SCDP_workspace.py
+# train_diffusion_SCDP_cat_workspace.py
 if __name__ == "__main__":
     import sys
     import os
@@ -11,9 +11,6 @@ if __name__ == "__main__":
 import os
 import hydra
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
 from omegaconf import OmegaConf
 import pathlib
 from torch.utils.data import DataLoader
@@ -24,7 +21,7 @@ import tqdm
 import numpy as np
 from termcolor import cprint
 from pcdp.workspace.base_workspace import BaseWorkspace
-from pcdp.policy.diffusion_SPEC_policy import SPECPolicy
+from pcdp.policy.diffusion_SPEC_policy_concat import SPECPolicyConcat
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.dataset.SPEC_stack_dataset import collate_fn
 from pcdp.env_runner.base_pointcloud_runner import BasePointCloudRunner 
@@ -50,9 +47,9 @@ class TrainSPECWorkspace(BaseWorkspace):
         np.random.seed(seed)
 
         # configure model
-        self.model: SPECPolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: SPECPolicyConcat = hydra.utils.instantiate(cfg.policy)
         
-        self.ema_model: SPECPolicy = None
+        self.ema_model: SPECPolicyConcat = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
     
@@ -84,7 +81,6 @@ class TrainSPECWorkspace(BaseWorkspace):
             RUN_ROLLOUT = True
             verbose = False
         
-        RUN_VALIDATION = False
         
         # resume training
         if cfg.training.resume:

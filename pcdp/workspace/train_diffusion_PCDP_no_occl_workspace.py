@@ -1,4 +1,4 @@
-# train_diffusion_unet_dp3_workspace.py
+# train_diffusion_PCDP_no_occl_workspace.py
 if __name__ == "__main__":
     import sys
     import os
@@ -19,7 +19,6 @@ import MinkowskiEngine as ME
 import wandb
 import tqdm
 import numpy as np
-import matplotlib.pyplot as plt
 
 from termcolor import cprint
 from pcdp.workspace.base_workspace import BaseWorkspace

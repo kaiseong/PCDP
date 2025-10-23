@@ -173,6 +173,7 @@ class PointCloudPreprocessor:
                 points = self._sample_points(points)
             return points
         
+        t0 = mono_time.now_ms()
         now_step = self._frame_idx
         self._decay_and_prune(now_step)
 
@@ -183,13 +184,9 @@ class PointCloudPreprocessor:
             self._mem[k] = (xyz.copy(), rgb.copy(), 1.0, now_step)
         
         out = self._export_array_from_mem()
-
-        if self._mem:
-            drop = [k for k, (xyz, rgb, c, s) in self._mem.items() if c < self._temporal_c_min]
-            for k in drop:
-                self._mem.pop(k, None)
         
         self._frame_idx += 1
+        print(f"cost time: {mono_time.now_ms()-t0}")
         return out
 
 

@@ -1,8 +1,8 @@
 defaults:
   - task: SPEC_stack
 
-name: train_diffusion_SPEC
-_target_: pcdp.workspace.train_diffusion_SPEC_workspace.TrainSPECWorkspace
+name: train_diffusion_SPEC_cat
+_target_: pcdp.workspace.train_diffusion_SPEC_cat_workspace.TrainSPECWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: pcdp.policy.diffusion_SPEC_policy.SPECPolicy
+  _target_: pcdp.policy.diffusion_SPEC_policy_concat.SPECPolicyConcat
   num_action: ${horizon}
   input_dim: 7
   obs_feature_dim: 512
@@ -29,6 +29,7 @@ policy:
   num_decoder_layers: 1
   dropout: 0.1
   #
+  mem_token_cap: null
   enable_c_gate: False
   mem_kv_mode: past_only
   c_now_threshold: 0.999999
@@ -72,10 +73,10 @@ training:
   debug: False
   resume: True
   lr_warmup_steps: 1000
-  num_epochs: 1000
+  num_epochs: 120
   use_ema: True
-  rollout_every: 5
-  save_epochs: 100
+  rollout_every: 1
+  save_epochs: 10
   tqdm_interval_sec: 1.0
   validation_every: 5
   # normalization
@@ -88,11 +89,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "SPEC_${now:%Y.%m.%d}-(no robot_obs MLP, No_Occl, No Filter)"
-  project: Test_1
+  name: "SPEC_Cat${now:%Y.%m.%d}-(no robot_obs MLP, No_Occl, No Filter)"
+  project: Test_3
   resume: true
   tags:
-  - PCDP_NSCL
+  - SPEC_NSCL
 
 checkpoint:
   save_ckpt: True
