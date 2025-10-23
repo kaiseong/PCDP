@@ -267,7 +267,6 @@ class SPEC_RealStackPointCloudDataset(BasePointCloudDataset):
             'input_feats_list': input_feats_list,
             'robot_obs': torch.from_numpy(robot_obs_10d).float(),
             'action': torch.from_numpy(actions_10d).float(),
-            'occlusion': torch.from_numpy(data['occlusion']).float(),
         }
 
 def collate_fn(batch):
