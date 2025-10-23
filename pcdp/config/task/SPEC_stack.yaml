@@ -55,7 +55,7 @@ dataset:
     enable_temporal: True
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}
-    temporal_decay: 0.80
+    temporal_decay: 0.90
     temporal_c_min: 0.20
     # temporal_max_points: 500000
 

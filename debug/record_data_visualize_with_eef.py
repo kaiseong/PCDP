@@ -41,7 +41,7 @@ camera_to_base = np.array([
 workspace_bounds = np.array([
     [ 0.000, 0.715],   # X (m)
     [-0.400, 0.350],   # Y (m)
-    [-0.100, 0.400],   # Z (m)
+    [-0.100, 0.600],   # Z (m)
 ], dtype=np.float64)
 
 # Base→Robot (시각화용)
@@ -87,7 +87,7 @@ class VisController:
 
     def step_forward(self, vis):
         if self.current_step < self.total_steps - 1:
-            self.current_step += 1
+            self.current_step += 3
             self.vis_changed = True
             print(f"Frame: {self.current_step}/{self.total_steps - 1}")
         return False
@@ -220,7 +220,10 @@ def interactive_visualize_with_gripper(obs_episode):
         enable_sampling=False,
         enable_transform=True,
         enable_filter=True,
-        nb_points=10, sor_std=1.7,
+        nb_points=10, 
+        sor_std=1.7,
+        enable_temporal=True,
+        export_mode="fused"
     )
 
     # --- O3D window & callbacks

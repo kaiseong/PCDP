@@ -1,4 +1,4 @@
-# eval_piper2.py
+# eval_piper_SPEC.py
 import time
 from multiprocessing.managers import SharedMemoryManager
 import click

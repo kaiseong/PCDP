@@ -173,7 +173,6 @@ class PointCloudPreprocessor:
                 points = self._sample_points(points)
             return points
         
-        t0 = mono_time.now_ms()
         now_step = self._frame_idx
         self._decay_and_prune(now_step)
 
@@ -185,14 +184,27 @@ class PointCloudPreprocessor:
         
         out = self._export_array_from_mem()
         
+        if self.verbose and out.shape[0] > 0:
+            rgb = out[:, 3:6].astype(np.float32)
+            c   = np.clip(out[:, 6:7], 0.0, 1.0)  # (N,1)
+            # 컬러 스케일 자동 감지(0~1 or 0~255)
+            scale255 = (rgb.max() > 1.0 + 1e-6)
+            s = 255.0 if scale255 else 1.0
+
+            rgb01 = rgb / s
+            alpha = np.power(c, 1)  # c^gamma
+            rgb01_faded = np.clip(rgb01 * alpha, 0.0, 1.0)
+            out[:, 3:6] = rgb01_faded * s
+
         self._frame_idx += 1
-        print(f"cost time: {mono_time.now_ms()-t0}")
         return out
 
 
     def _apply_transform(self, points):
         """Apply extrinsics transformation and scaling."""
         # Scale from mm to m (Orbbec specific)
+
+        points = points[points[:, 2] > 0.0]
         point_xyz = points[:, :3] * 0.001
         
         # Apply extrinsics transformation

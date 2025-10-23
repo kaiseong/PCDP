@@ -1,4 +1,4 @@
-# eval_piper2.py
+# eval_piper_SPEC_CAT.py
 import time
 from multiprocessing.managers import SharedMemoryManager
 import click
@@ -170,11 +170,13 @@ def main(input, output, match_episode, frequency):
                         if not is_evaluating:
                             env.start_episode()
                             is_evaluating = True
+                            pc_preprocessor.reset_temporal()
                             test_start = mono_time.now_ms()
                             cprint("Evaluation started!", "cyan")
                     elif key_stroke == KeyCode(char='s'):
                         if is_evaluating:
                             env.end_episode()
+                            pc_preprocessor.reset_temporal()
                             is_evaluating = False
                             cprint("Evaluation stopped. Human in control.", "yellow")
 

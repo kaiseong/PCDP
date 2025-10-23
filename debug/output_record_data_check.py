@@ -87,7 +87,10 @@ def point_cloud_visualize(obs_episode):
     preprocess = PointCloudPreprocessor(extrinsics_matrix=camera_to_base,
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
-                                        enable_filter=False)
+                                        enable_filter=True,
+                                        enable_temporal=True,
+                                        export_mode="fused"
+                                        )
     low_preprocess = LowDimPreprocessor()
 
     pts_seq = obs_episode['pointcloud']
