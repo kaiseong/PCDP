@@ -89,7 +89,9 @@ def point_cloud_visualize(obs_episode):
                                         enable_sampling=False,
                                         enable_filter=True,
                                         enable_temporal=True,
-                                        export_mode="fused"
+                                        export_mode="fused",
+                                        temporal_prune_every=1,
+                                        temporal_decay=0.99
                                         )
     low_preprocess = LowDimPreprocessor()
 
@@ -175,5 +177,5 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
 if __name__ == "__main__":
     analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/please_please/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0108')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0108')
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0163')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0163')

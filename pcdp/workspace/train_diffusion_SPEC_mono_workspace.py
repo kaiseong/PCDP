@@ -24,7 +24,7 @@ import tqdm
 import numpy as np
 from termcolor import cprint
 from pcdp.workspace.base_workspace import BaseWorkspace
-from pcdp.policy.diffusion_SPEC_policy import SPECPolicy
+from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicyMono
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.dataset.SPEC_stack_dataset import collate_fn
 from pcdp.env_runner.base_pointcloud_runner import BasePointCloudRunner 
@@ -50,9 +50,9 @@ class TrainSPECWorkspace(BaseWorkspace):
         np.random.seed(seed)
 
         # configure model
-        self.model: SPECPolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: SPECPolicyMono = hydra.utils.instantiate(cfg.policy)
         
-        self.ema_model: SPECPolicy = None
+        self.ema_model: SPECPolicyMono = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
     
@@ -126,7 +126,7 @@ class TrainSPECWorkspace(BaseWorkspace):
         # optimizer and lr scheduler
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=self.optimizer,
-            num_warmup_steps= 2000,
+            num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=len(dataloader) * cfg.training.num_epochs
         )
         if cfg.training.resume and self.global_step > 0:

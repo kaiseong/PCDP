@@ -108,7 +108,7 @@ class TrainRISEWorkspace(BaseWorkspace):
         # optimizer and lr scheduler
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=self.optimizer,
-            num_warmup_steps= 2000,
+            num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=len(dataloader) * cfg.training.num_epochs
         )
         if cfg.training.resume and self.global_step > 0:

@@ -48,8 +48,12 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
+    enable_filter: False
+    nb_points: 10
+    sor_std: 1.7
     use_cuda: True
     verbose: False
+    enable_temporal: False
 
     # Camera to robot transformation matrix (4x4). 
     extrinsics_matrix:

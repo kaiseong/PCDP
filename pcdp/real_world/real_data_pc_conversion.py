@@ -50,6 +50,10 @@ class PointCloudPreprocessor:
                 temporal_decay=0.90,
                 temporal_c_min=0.20,
                 temporal_max_points=None,
+                # hmm...
+                temporal_prune_every: int=1,
+                stable_export: bool = False,
+
                 ):
 
         # Default extrinsics matrix (camera to robot transform)
@@ -92,8 +96,19 @@ class PointCloudPreprocessor:
         self._temporal_c_min = float(temporal_c_min)
         self._temporal_max_points = temporal_max_points
         
+        self._prune_every = int(max(1, temporal_prune_every))
+        self._stable_export = bool(stable_export)
+
         self._frame_idx = 0
-        self._mem = {}
+        self._mem_keys = np.empty((0,), dtype=np.dtype((np.void, 12)))
+        self._mem_xyz = np.empty((0, 3), dtype=np.float32)
+        self._mem_rgb = np.empty((0, 3), dtype=np.float32)
+        self._mem_step = np.empty((0, ), dtype=np.int32)
+
+        if 0.0 < self._temporal_decay < 1.0 and 0.0 < self._temporal_c_min < 1.0:
+            self._max_age_steps = int(np.floor(np.log(self._temporal_c_min)/np.log(self._temporal_decay)))
+        else:
+            self._max_age_steps = 0
 
         if self.verbose:
             print(f"PointCloudPreprocessor initialized:")
@@ -108,35 +123,99 @@ class PointCloudPreprocessor:
     
     def reset_temporal(self):
         """Call at the start of each episode."""
-        self._mem.clear()
         self._frame_idx = 0
+        self._mem_keys = np.empty((0, ), dtype=np.dtype((np.void, 12)))
+        self._mem_xyz   = np.empty((0, 3), dtype=np.float32)
+        self._mem_rgb   = np.empty((0, 3), dtype=np.float32)
+        self._mem_step  = np.empty((0,),  dtype=np.int32)
 
-    def _key_from_xyz(self, xyz: np.ndarray):
-        return tuple(np.floor(xyz / self._temporal_voxel_size).astype(np.int32).tolist())
-
-    def _decay_and_prune(self, now_step: int):
-        if not self._mem: 
-            return
-        drop = []
-        for k, (xyz, rgb, c, s) in self._mem.items():
-            dt = max(0, now_step - s)
-            c_new = self._temporal_decay ** dt
-            if c_new < self._temporal_c_min:
-                drop.append(k)
-            else:
-                self._mem[k] = (xyz, rgb, c_new, s)
-        for k in drop:
-            self._mem.pop(k, None)
+    def voxel_keys_from_xyz(self, xyz:np.ndarray):
+        grid = np.floor(xyz / self._temporal_voxel_size).astype(np.int32, copy=False) # (N, 3) int32
+        grid = np.ascontiguousarray(grid)
+        keys = grid.view(np.dtype((np.void, 12))).ravel() # (N, ) 12byte key
+        return keys
     
-    def _export_array_from_mem(self) -> np.ndarray:
-        if not self._mem:
+    def _frame_unique(self, xyz: np.ndarray, rgb: np.ndarray, last_wins: bool=False):
+        if xyz.shape[0] == 0:
+            return xyz, rgb
+        keys = self.voxel_keys_from_xyz(xyz)
+        if last_wins:
+            # 뒤집어서 unique → 다시 뒤집어 인덱스 복원
+            rev = keys[::-1]
+            _, idx_rev = np.unique(rev, return_index=True)
+            uniq_idx = (len(keys) - 1) - idx_rev
+        else:
+            _, uniq_idx = np.unique(keys, return_index=True)
+        return xyz[uniq_idx], rgb[uniq_idx]
+    
+    def _merge_into_mem(self, xyz_new: np.ndarray, rgb_new: np.ndarray, now_step: int):
+        if xyz_new.shape[0] == 0:
+            return
+        keys_new = self.voxel_keys_from_xyz(xyz_new)
+        
+        if self._mem_keys.size == 0:
+            self._mem_keys = keys_new.copy()
+            self._mem_xyz  = xyz_new.astype(np.float32, copy=False).copy()
+            self._mem_rgb  = rgb_new.astype(np.float32, copy=False).copy()
+            self._mem_step = np.full((xyz_new.shape[0],), now_step, dtype=np.int32)
+            return
+        
+        # 교집합: 기존 → 현재로 덮어쓰기 (c=1과 동일)
+        common, idx_mem, idx_new = np.intersect1d(self._mem_keys, keys_new, return_indices=True)
+        if common.size > 0:
+            self._mem_xyz[idx_mem]  = xyz_new[idx_new]
+            self._mem_rgb[idx_mem]  = rgb_new[idx_new]
+            self._mem_step[idx_mem] = now_step
+        
+                # 신규만 append
+        mask_new_only = np.ones(keys_new.shape[0], dtype=bool)
+        if common.size > 0:
+            mask_new_only[idx_new] = False
+        if mask_new_only.any():
+            self._mem_keys = np.concatenate([ self._mem_keys, keys_new[mask_new_only] ], axis=0)
+            self._mem_xyz  = np.concatenate([ self._mem_xyz,  xyz_new[mask_new_only] ], axis=0)
+            self._mem_rgb  = np.concatenate([ self._mem_rgb,  rgb_new[mask_new_only] ], axis=0)
+            self._mem_step = np.concatenate([ self._mem_step,
+                                              np.full((mask_new_only.sum(),), now_step, dtype=np.int32) ], axis=0)
+    # === 주기적(prune_every) 프루닝: decay^age < c_min 동일 의미 ===
+    def _prune_mem(self, now_step: int):
+        if self._mem_keys.size == 0:
+            return
+        if (now_step % self._prune_every) != 0:
+            return
+        age = now_step - self._mem_step
+        keep = (age <= self._max_age_steps)
+        if not np.all(keep):
+            self._mem_keys = self._mem_keys[keep]
+            self._mem_xyz  = self._mem_xyz[keep]
+            self._mem_rgb  = self._mem_rgb[keep]
+            self._mem_step = self._mem_step[keep]
+
+    def _export_array_from_mem(self, now_step: int) -> np.ndarray:
+        N = self._mem_keys.size
+        if N == 0:
             return np.zeros((0,7), dtype=np.float32)
-        arr = np.asarray([[*xyz, *rgb, c] for (xyz, rgb, c, _) in self._mem.values()], dtype=np.float32)
-        # optional global budget
-        if self._temporal_max_points is not None and len(arr) > self._temporal_max_points:
-            idx = np.random.choice(len(arr), self._temporal_max_points, replace=False)
-            arr = arr[idx]
-        return arr
+        age = (now_step - self._mem_step).astype(np.float32)
+        c   = (self._temporal_decay** age).astype(np.float32, copy=False)  # (N,)
+
+        # stable order 원하면 키 기준 정렬
+        if self._stable_export:
+            order = np.argsort(self._mem_keys)  # 바이트키 정렬(결정적)
+            xyz = self._mem_xyz[order]
+            rgb = self._mem_rgb[order]
+            c   = c[order]
+        else:
+            xyz = self._mem_xyz
+            rgb = self._mem_rgb
+
+        out = np.concatenate([xyz, rgb, c[:,None]], axis=1).astype(np.float32, copy=False)
+
+        # budget(있으면)
+        if self._temporal_max_points is not None and out.shape[0] > self._temporal_max_points:
+            idx = np.random.choice(out.shape[0], self._temporal_max_points, replace=False)
+            out = out[idx]
+        return out
+
         
     def process(self, points):
         """
@@ -158,44 +237,54 @@ class PointCloudPreprocessor:
             
         # Ensure points is float32
         points = points.astype(np.float32)
-
+        t0 = mono_time.now_ms()
         # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
         # Workspace cropping
+        t1 = mono_time.now_ms()
         if self.enable_cropping:
             points = self._crop_workspace(points)
+        t2 = mono_time.now_ms()
         if self.enable_filter:
             points = self._apply_filter(points)
-        if not self.enable_temporal or self.export_mode=="off":
+        if not self.enable_temporal or self.export_mode!="fused":
             # Point FPS sampling
             if self.enable_sampling:
                 points = self._sample_points(points)
             return points
         
-        now_step = self._frame_idx
-        self._decay_and_prune(now_step)
+        t3 = mono_time.now_ms()
 
-        for i in range(len(points)):
-            xyz = points[i, :3]
-            rgb = points[i, 3:6]
-            k = self._key_from_xyz(xyz)
-            self._mem[k] = (xyz.copy(), rgb.copy(), 1.0, now_step)
+        now_step = self._frame_idx
+
+        # 1) 프레임 내 voxel-unique (동일 voxel 중복 제거 – 기능 동일)
+        xyz_now = points[:, :3]
+        rgb_now = points[:, 3:6]
+        xyz_now, rgb_now = self._frame_unique(xyz_now, rgb_now)
+
+        # 2) 메모리 병합: 겹치면 '현재'로 갱신 (latest-wins = c 큰 값 유지와 동일 의미)
+        self._merge_into_mem(xyz_now, rgb_now, now_step)
+
+        # 3) 주기적 프루닝(decay^age < c_min) – 기능 동일, 벡터화
+        self._prune_mem(now_step)
+
+        # 4) export: lazy decay로 c 계산해 Nx7 반환 (기능 동일)
+        out = self._export_array_from_mem(now_step)
         
-        out = self._export_array_from_mem()
-        
+        # (선택) 시각화 로그: 과거일수록 페이드
         if self.verbose and out.shape[0] > 0:
-            rgb = out[:, 3:6].astype(np.float32)
-            c   = np.clip(out[:, 6:7], 0.0, 1.0)  # (N,1)
-            # 컬러 스케일 자동 감지(0~1 or 0~255)
+            rgb = out[:, 3:6].astype(np.float32, copy=False)
+            c   = np.clip(out[:, 6:7], 0.0, 1.0)
             scale255 = (rgb.max() > 1.0 + 1e-6)
             s = 255.0 if scale255 else 1.0
-
-            rgb01 = rgb / s
-            alpha = np.power(c, 1)  # c^gamma
-            rgb01_faded = np.clip(rgb01 * alpha, 0.0, 1.0)
-            out[:, 3:6] = rgb01_faded * s
-
+            out[:, 3:6] = np.clip((rgb/s) * c, 0.0, 1.0) * s
+            print(f"time0: {t1 - t0}")
+            print(f"time1: {t2 - t1}")
+            print(f"time2: {t3 - t2}")
+            print(f"time3: {mono_time.now_ms() - t3}")
+        
+        
         self._frame_idx += 1
         return out
 

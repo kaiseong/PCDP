@@ -1,4 +1,4 @@
-# diffusion_SPEC_policy.py
+# diffusion_SPEC_policy_mono.py
 import copy
 import torch
 import torch.nn as nn
@@ -35,7 +35,7 @@ class CrossAttn(nn.Module):
         return x
 
 
-class SPECPolicy(BasePointCloudPolicy):
+class SPECPolicyMono(BasePointCloudPolicy):
     def __init__(
             self,
             num_action = 20,
@@ -48,21 +48,17 @@ class SPECPolicy(BasePointCloudPolicy):
             num_decoder_layers = 1,
             dim_feedforward = 2048,
             dropout = 0.1,
-            # spec
-            mem_kv_mode: str = "past_only",     # 'past_only' | 'all'
-            enable_c_gate: bool = False,        # True면 rgb *= c 게이팅
-            c_now_threshold: float = 1.0 - 1e-6,
-            c_past_threshold: float = 1.0 - 1e-6,
-    ):
+            # ---- 입력 전처리 ----
+            enable_c_gate: bool = True,         # True면 rgb *= c
+            # ---- 인코더 토큰 상한(YAML에서 조절) ----
+            encoder_max_num_token: int = 100,
+            ):
         super().__init__()
         num_obs = 1
         robot_obs_dim = 10
 
-        # dual encoder
-        self.enc_mem = Sparse3DEncoder(input_dim=input_dim, output_dim=obs_feature_dim)
-        self.enc_now = Sparse3DEncoder(input_dim=input_dim, output_dim=obs_feature_dim)
-        # cross attention
-        self.cross_attn = CrossAttn(d_model=obs_feature_dim, nheads=nheads, dropout=dropout)
+        # single encoder
+        self.encoder = Sparse3DEncoder(input_dim=input_dim, output_dim=obs_feature_dim)
         # rise
         self.transformer = Transformer(hidden_dim, nheads, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout)
         self.action_decoder = DiffusionUNetPolicy(action_dim, num_action, num_obs, obs_feature_dim + robot_obs_dim)
@@ -71,41 +67,33 @@ class SPECPolicy(BasePointCloudPolicy):
         self.normalizer = LinearNormalizer()
         # policy
         self.enable_c_gate=enable_c_gate
-        self.mem_kv_mode=mem_kv_mode
-        self.c_now_threshold = c_now_threshold
-        self.c_past_threshold = c_past_threshold
+        self.encoder_max_num_token = encoder_max_num_token
         
 
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
     @torch.no_grad()
-    def _make_now_view(self, cloud: ME.SparseTensor) -> ME.SparseTensor:
-        """UNION 없이 now 부분좌표만 추출 (c>=1-ε). 빈 경우 fallback로 전체 반환."""
-        feats = cloud.F
-        coords = cloud.C
-        c = feats[:, 6]
-        mask = c >= self.c_now_threshold
-        if mask.sum() == 0:
-            return cloud
-        return ME.SparseTensor(features=feats[mask], coordinates=coords[mask], device=cloud.device)
-    
-    @torch.no_grad()
-    def _make_mem_kv_view(self, cloud: ME.SparseTensor) -> ME.SparseTensor:
-        """K/V로 쓸 메모리 뷰 선택: 'past_only'면 c<1-ε만, 'all'이면 전체."""
-        if self.mem_kv_mode=='all':
-            return cloud
+    def _apply_normalize_and_gate(self, cloud: ME.SparseTensor) -> ME.SparseTensor:
+        """RGB 정규화(+선택적 c-게이팅)만 수행."""
         feats, coords = cloud.F, cloud.C
-        c = feats[:, 6]
-        mask = c < self.c_past_threshold
-        if mask.sum() == 0:
-            return cloud
-        return ME.SparseTensor(features=feats[mask], coordinates=coords[mask], device=cloud.device)
-    
+        colors = feats[:, 3:6]
+        c = feats[:, 6:7]
+
+        # RGB normalize
+        colors = self.normalizer['pointcloud_color'].normalize(colors)
+
+        # c-gate (신선할수록 영향↑)
+        if self.enable_c_gate:
+            colors = colors * c
+
+        new_feats = torch.cat([feats[:, :3], colors, c], dim=1)
+        return ME.SparseTensor(features=new_feats, coordinates=coords, device=cloud.device)
+
 
     def forward(self, cloud: ME.SparseTensor, actions=None, robot_obs=None, batch_size=24):
-        assert robot_obs is not None, "SPECPolicy expects robot_obs (B,10) or (B,T,10)."
-        if robot_obs.dim() == 2:  # Inference: [B,10] -> [B,1,10]
+        assert robot_obs is not None, "SPECPolicyMono expects robot_obs (B,10) or (B,T,10)."
+        if robot_obs.dim() == 2:  # [B,10] -> [B,1,10]
             robot_obs = robot_obs.unsqueeze(1)
 
         dev = cloud.F.device if hasattr(cloud, "F") else cloud.device
@@ -115,18 +103,7 @@ class SPECPolicy(BasePointCloudPolicy):
         # Normalize inputs if normalizer is set
         if self.normalizer is not None:
             # Normalize point cloud colors
-            cloud_feats = cloud.F
-            cloud_colors = cloud_feats[:, 3:6]
-            confidence = cloud_feats[:, 6:7]
-            norm_colors = self.normalizer['pointcloud_color'].normalize(cloud_colors)
-            if self.enable_c_gate:
-                norm_colors = norm_colors * confidence
-            # Create new sparse tensor with normalized colors
-            cloud = ME.SparseTensor(
-                features=torch.cat([cloud_feats[:, :3], norm_colors, confidence], dim=1),
-                coordinates=cloud.C,
-                device=cloud.device
-            )
+            cloud = self._apply_normalize_and_gate(cloud)
 
             # Normalize low-dim robot_obs
             # robot_obs: (B, T, 10) where T=n_obs_steps
@@ -147,21 +124,19 @@ class SPECPolicy(BasePointCloudPolicy):
                 norm_action_grip = self.normalizer['action_gripper'].normalize(action_grip)
                 actions = torch.cat([norm_action_trans, action_rot, norm_action_grip], dim=-1)
         
-        # now / mem 분리 (UNION 불필요)
-        cloud_now = self._make_now_view(cloud) # Q
-        cloud_mem = self._make_mem_kv_view(cloud) # K/V
 
-        # dual encoding
-        mem_src, mem_pos, mem_pad = self.enc_mem(cloud_mem, batch_size=batch_size)
-        now_src, now_pos, now_pad = self.enc_now(cloud_now, batch_size=batch_size)
+        # 4) 단일 인코더 (최종 토큰 상한은 encoder_max_num_token)
+        src, pos, pad = self.encoder(
+            cloud, batch_size=batch_size, max_num_token=self.encoder_max_num_token
+        )  # shapes: [B, N, D], [B, N, D], [B, N]
+        print(f"pad: {pad}")
 
-        # cross attention
-        now_fused = self.cross_attn(now_src + now_pos, mem_src+mem_pos, pad_now=now_pad, pad_mem=mem_pad)
-        readout_seq = self.transformer(now_fused, now_pad, self.readout_embed.weight, now_pos)[-1] # [B, 1, 512]
-        readout_raw = readout_seq[:, 0, :]  # [B,512] 
+        # 5) RISE Transformer + readout
+        readout_seq = self.transformer(src, pad, self.readout_embed.weight, pos)[-1]  # [B,1,D]
+        readout = readout_seq[:, 0, :]                                                # [B,D]
+
         
-        
-        global_cond = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
+        global_cond = torch.cat([readout, robot_obs[:,0,:]], dim =-1)
         # cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
         # global_cond = self.cond_proj(cond_in)
         

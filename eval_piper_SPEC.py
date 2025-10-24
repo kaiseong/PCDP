@@ -19,7 +19,7 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_SPEC_policy import SPECPolicy
+from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicy
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor

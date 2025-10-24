@@ -1,8 +1,8 @@
 defaults:
   - task: SPEC_stack
 
-name: train_diffusion_SPEC
-_target_: pcdp.workspace.train_diffusion_SPEC_workspace.TrainSPECWorkspace
+name: train_diffusion_SPEC_mono
+_target_: pcdp.workspace.train_diffusion_SPEC_mono_workspace.TrainSPECWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: pcdp.policy.diffusion_SPEC_policy.SPECPolicy
+  _target_: pcdp.policy.diffusion_SPEC_policy_mono.SPECPolicyMono
   num_action: ${horizon}
   input_dim: 7
   obs_feature_dim: 512
@@ -30,9 +30,6 @@ policy:
   dropout: 0.1
   #
   enable_c_gate: False
-  mem_kv_mode: past_only
-  c_now_threshold: 0.999999
-  c_past_threshold: 0.999999
 
 
 ema:
@@ -88,11 +85,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "SPEC_${now:%Y.%m.%d}-(no robot_obs MLP, No_Occl, No Filter)"
+  name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=on)"
   project: Test_1
   resume: true
   tags:
-  - PCDP_NSCL
+  - SPEC_mono_NSCL
 
 checkpoint:
   save_ckpt: True

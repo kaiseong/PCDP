@@ -223,7 +223,9 @@ def interactive_visualize_with_gripper(obs_episode):
         nb_points=10, 
         sor_std=1.7,
         enable_temporal=True,
-        export_mode="fused"
+        export_mode="fused",
+        verbose=False,
+        temporal_decay=0.99
     )
 
     # --- O3D window & callbacks

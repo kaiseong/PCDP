@@ -42,7 +42,7 @@ dataloader:
   drop_last: True
 
 val_dataloader:
-  batch_size: 180
+  batch_size: 190
   num_workers: 15
   shuffle: False
   drop_last: False
@@ -59,10 +59,10 @@ training:
   seed: 233
   debug: False
   resume: True
-  lr_warmup_steps: 2000
-  num_epochs: 2000
+  lr_warmup_steps: 1000
+  num_epochs: 1000
   use_ema: False
-  rollout_every: 5
+  rollout_every: 1
   save_epochs: 100
   tqdm_interval_sec: 1.0
   validation_every: 5
@@ -77,11 +77,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "RISE_${now:%Y.%m.%d}"
-  project: Test_2
+  name: "RISE_${now:%Y.%m.%d}-(Filter=OFF)"
+  project: Test_3
   resume: true
   tags:
-  - rise
+  - RISE_NSCL
 
 checkpoint:
   save_ckpt: True
