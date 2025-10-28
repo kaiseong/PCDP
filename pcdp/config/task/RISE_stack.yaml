@@ -48,7 +48,7 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_filter: False
+    enable_filter: True
     nb_points: 10
     sor_std: 1.7
     use_cuda: True

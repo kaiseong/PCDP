@@ -49,6 +49,7 @@ class EpisodeStreamer:
         self.episode_dir = episode_dir
         self.episode_dir.mkdir(parents=True, exist_ok=True)
         self.save_batch_size = save_batch_size
+        self.save_data = save_data
         self.compression_level = compression_level
 
         # Batch buffers
@@ -206,7 +207,8 @@ class Recorder(mp.Process):
         max_buffer_size: int = 30,
         save_batch_size: int = 1,
         record_rgb: bool = True,
-        rgb_fps: int = 30
+        rgb_fps: int = 30,
+        save_data: bool = False
     ):
         super().__init__(name="Recorder")
         
@@ -219,6 +221,7 @@ class Recorder(mp.Process):
         self.polling_dt = 1.0 / frequency  # 0.005s = 5ms
         self.max_buffer_size = max_buffer_size
         self.save_batch_size = save_batch_size
+        self.save_data = save_data
         self.writer_queue = queue.Queue(maxsize=1024)
         self.writer_thread = threading.Thread(
             target=self._writer_loop,
@@ -532,7 +535,8 @@ class Recorder(mp.Process):
                 obs_data['d405_timestamp'] = d405_data['timestamp']
                 obs_data['d405_capture_timestamp'] = d405_data['camera_capture_timestamp']
             
-            self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
+            if self.episode_streamer is not None:
+                self.writer_queue.put_nowait({'type': 'obs', 'data': obs_data})
 
     def _process_action_queue(self):
         try:
@@ -568,12 +572,15 @@ class Recorder(mp.Process):
                         self.episode_counter = self.episode_id + 1
 
                         # new episode_stemaer create
-                        episode_dir = self.get_episode_dir(self.episode_id)
-                        self.episode_streamer = EpisodeStreamer(
-                            episode_dir, 
-                            self.save_batch_size, 
-                            compression_level=self.compression_level
-                        )
+                        if self.save_data:
+                            episode_dir = self.get_episode_dir(self.episode_id)
+                            self.episode_streamer = EpisodeStreamer(
+                                episode_dir, 
+                                self.save_batch_size, 
+                                compression_level=self.compression_level
+                            )
+                        else:
+                            self.episode_streamer = None
 
                         self.recording = True
                         self.recording_event.set()

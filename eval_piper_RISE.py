@@ -70,7 +70,8 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
 @click.option('--output', '-o', required=True, help='Directory to save evaluation results.')
 @click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode for initial condition visualization')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
-def main(input, output, match_episode, frequency):
+@click.option('--save-data', is_flag=True, default=False, help="Enable saving episode data (pointcloud, robot state).")
+def main(input, output, match_episode, frequency, save_data):
     # 체크포인트 및 설정 로드
     ckpt_path = input
     payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
@@ -142,7 +143,8 @@ def main(input, output, match_episode, frequency):
                 frequency=frequency,
                 init_joints=True,
                 orbbec_mode="C2D",
-                shm_manager=shm_manager
+                shm_manager=shm_manager,
+                save_data=save_data
             ) as env:
             
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")

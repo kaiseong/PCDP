@@ -1,3 +1,4 @@
+# train_diffusion_SPEC_mono_worksapce.yaml
 defaults:
   - task: SPEC_stack
 

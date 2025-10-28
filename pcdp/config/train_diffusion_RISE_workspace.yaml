@@ -1,3 +1,4 @@
+# train_diffusion_RISE_workspace.yaml
 defaults:
   - task: RISE_stack
 
@@ -36,8 +37,8 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 220
-  num_workers: 15
+  batch_size: 180
+  num_workers: 20
   shuffle: True
   drop_last: True
 
@@ -60,10 +61,10 @@ training:
   debug: False
   resume: True
   lr_warmup_steps: 1000
-  num_epochs: 1000
+  num_epochs: 120
   use_ema: False
   rollout_every: 1
-  save_epochs: 100
+  save_epochs: 10
   tqdm_interval_sec: 1.0
   validation_every: 5
   # normalize
@@ -77,7 +78,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "RISE_${now:%Y.%m.%d}-(Filter=OFF)"
+  name: "RISE_${now:%Y.%m.%d}-(Filter=ON)"
   project: Test_3
   resume: true
   tags:

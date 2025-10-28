@@ -45,6 +45,7 @@ class RealEnv:
             orbbec_mode = "C2D",
             # shared memory
             shm_manager=None,
+            save_data: bool = False
             ):
         assert frequency <= capture_fps
         output_dir = pathlib.Path(output_dir)
@@ -109,7 +110,8 @@ class RealEnv:
             robot=robot,
             output_dir=str(recorder_data_dir),
             compression_level=2,
-            frequency=200.0
+            frequency=200.0,
+            save_data=save_data
         )
         
         self.orbbec = orbbec
