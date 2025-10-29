@@ -2,6 +2,7 @@
 from typing import Sequence, Tuple, Dict, Optional, Union, List
 import os
 import pathlib
+import cv2
 import numpy as np
 import zarr
 import numcodecs
@@ -32,6 +33,40 @@ class PointCloudPreprocessor:
     updates a stateful voxel map (per episode) with exponential decay and returns
     an Nx7 array: [x,y,z,r,g,b,c], where `c` is temporal confidence (recency).
     """
+
+    # ----------[ NEW ]: Orbbec→OpenCV 변환 유틸 ----------
+    @staticmethod
+    def _is_orbbec_intrinsics(obj) -> bool:
+        return all(hasattr(obj, a) for a in ("fx", "fy", "cx", "cy"))
+
+    @staticmethod
+    def _is_orbbec_distortion(obj) -> bool:
+        return all(hasattr(obj, a) for a in ("k1","k2","k3","k4","k5","k6","p1","p2"))
+
+    @staticmethod
+    def _as_cv_K_from_orbbec_intrinsics(orbbec_intr):
+        # OBCameraIntrinsic → OpenCV K
+        K = np.array([[float(orbbec_intr.fx), 0.0, float(orbbec_intr.cx)],
+                      [0.0, float(orbbec_intr.fy), float(orbbec_intr.cy)],
+                      [0.0, 0.0, 1.0]], dtype=np.float64)
+        return K
+
+    @staticmethod
+    def _as_cv_dist_from_orbbec_distortion(orbbec_dist):
+        # Orbbec(k1..k6, p1, p2) → OpenCV rational 8계수 [k1,k2,p1,p2,k3,k4,k5,k6]
+        k1 = float(orbbec_dist.k1); k2 = float(orbbec_dist.k2); k3 = float(orbbec_dist.k3)
+        k4 = float(orbbec_dist.k4); k5 = float(orbbec_dist.k5); k6 = float(orbbec_dist.k6)
+        p1 = float(orbbec_dist.p1); p2 = float(orbbec_dist.p2)
+        return np.array([k1, k2, p1, p2, k3, k4, k5, k6], dtype=np.float64)
+
+    @staticmethod
+    def convert_orbbec_depth_params(depth_intrinsics, depth_distortion):
+        """외부에서 편히 쓰는 변환기: (Orbbec intr, dist) -> (K(3x3), dist(8,))."""
+        K = PointCloudPreprocessor._as_cv_K_from_orbbec_intrinsics(depth_intrinsics)
+        dist = PointCloudPreprocessor._as_cv_dist_from_orbbec_distortion(depth_distortion)
+        return K, dist
+    # -----------------------------------------------------
+
     def __init__(self, 
                 enable_sampling=False,
                 target_num_points=1024,
@@ -49,14 +84,19 @@ class PointCloudPreprocessor:
                 temporal_voxel_size=0.005,
                 temporal_decay=0.90,
                 temporal_c_min=0.20,
-                temporal_max_points=None,
                 # hmm...
                 temporal_prune_every: int=1,
                 stable_export: bool = False,
-
+                enable_occlusion_prune: bool = True,
+                depth_width: Optional[int] = 320,
+                depth_height: Optional[int] = 288,
+                K_depth: Optional[Sequence[Sequence[float]]] = None,    # 3x3
+                dist_depth: Optional[Sequence[float]] = None,           # None or 5/8계수
+                erode_k: int = 1,
+                z_unit: str = 'm',   # 'm' or 'mm',
+                occl_patch_radius: int = 2
                 ):
 
-        # Default extrinsics matrix (camera to robot transform)
         if extrinsics_matrix is None:
             self.extrinsics_matrix = np.array([
                 [  0.007131,  -0.91491,    0.403594,  0.05116],
@@ -77,7 +117,33 @@ class PointCloudPreprocessor:
         else:
             self.workspace_bounds = workspace_bounds
         
-            
+        if K_depth is None:
+            self._K_depth = np.array([
+                [252.69204711914062, 0.0, 166.12030029296875],
+                [0.0, 252.65277099609375, 176.21173095703125],
+                [0.0, 0.0, 1.0]
+                ], dtype=np.float64)
+        else:
+            if self._is_orbbec_intrinsics(K_depth):
+                self._K_depth = self._as_cv_K_from_orbbec_intrinsics(K_depth)
+            else:
+                self._K_depth = np.array(K_depth, dtype=np.float64)
+        assert self._K_depth.shape == (3, 3), f"K_depth must be 3x3, got {self._K_depth.shape}"
+
+        if dist_depth is None:
+            # [k1 k2 p1 p2 k3 k4 k5 k6]
+            self._dist_depth = np.array(
+            [11.690222, 5.343991, 0.000065, 0.000014, 0.172997, 12.017323, 9.254467, 1.165690], dtype=np.float64)
+        else:
+            if self._is_orbbec_distortion(dist_depth):
+                self._dist_depth = self._as_cv_dist_from_orbbec_distortion(dist_depth)
+            else:
+                self._dist_depth = np.asarray(dist_depth, dtype=np.float64)
+                if self._dist_depth.size not in (4, 5, 8):
+                    raise ValueError(f"dist_depth must have 5 or 8 coeffs, got {self._dist_depth.size}")
+
+
+
         self.target_num_points = target_num_points
         self.nb_points = nb_points
         self.sor_std = sor_std
@@ -94,10 +160,26 @@ class PointCloudPreprocessor:
         self._temporal_voxel_size = float(temporal_voxel_size)
         self._temporal_decay = float(temporal_decay)
         self._temporal_c_min = float(temporal_c_min)
-        self._temporal_max_points = temporal_max_points
         
         self._prune_every = int(max(1, temporal_prune_every))
         self._stable_export = bool(stable_export)
+            
+        # occlusion prune 설정
+        self.enable_occlusion_prune = bool(enable_occlusion_prune)
+        self._depth_w = int(depth_width) 
+        self._depth_h = int(depth_height) 
+        self._erode_k = int(erode_k)
+        self._z_unit = str(z_unit)
+        self.occl_patch_radius = int(occl_patch_radius)
+
+        # extrinsics_matrix는 Camera->Base 이므로 Base->Camera를 미리 준비
+        self._base_to_cam = None
+        if self.enable_occlusion_prune:
+            if self.extrinsics_matrix is None:
+                raise ValueError("enable_occlusion_prune=True인데 extrinsics_matrix가 없습니다.")
+            self._base_to_cam = np.linalg.inv(np.array(self.extrinsics_matrix, dtype=np.float64))
+            if self._K_depth is None or self._depth_w is None or self._depth_h is None:
+                raise ValueError("occlusion prune에는 depth_width/height와 K_depth가 필요합니다.")
 
         self._frame_idx = 0
         self._mem_keys = np.empty((0,), dtype=np.dtype((np.void, 12)))
@@ -121,6 +203,95 @@ class PointCloudPreprocessor:
         """Process pointcloud through the full pipeline."""
         return self.process(points)
     
+    def _project_points_cam(self, xyz_cam: np.ndarray):
+        """카메라 좌표계 3D -> (u,v,z, inb_mask). z는 z_unit에 맞춘 float."""
+        
+        if xyz_cam.size == 0:
+            return (np.array([], np.int32),)*2 + (np.array([], np.float64), np.array([], bool))
+        valid = xyz_cam[:, 2] > 0.0
+        pts = xyz_cam[valid]
+        if pts.size == 0:
+            return (np.array([], np.int32),)*2 + (np.array([], np.float64), np.zeros(0, bool))
+        rvec = np.zeros((3,1), np.float64); tvec = np.zeros((3,1), np.float64)
+        dist = np.zeros(5, np.float64) if self._dist_depth is None else self._dist_depth
+        imgpts, _ = cv2.projectPoints(pts.reshape(-1,1,3), rvec, tvec, self._K_depth, dist)
+        uv = imgpts.reshape(-1,2)
+        u = np.rint(uv[:,0]).astype(np.int32)
+        v = np.rint(uv[:,1]).astype(np.int32)
+        inb = (u >= 0) & (u < self._depth_w) & (v >= 0) & (v < self._depth_h)
+        return u[inb], v[inb], pts[inb, 2].astype(np.float64), valid.nonzero()[0][inb]
+
+    def _rasterize_min(self, u: np.ndarray, v: np.ndarray, z: np.ndarray):
+        """Z-buffer(min)로 깊이 이미지(uint16, mm) 생성."""
+        depth = np.zeros((self._depth_h, self._depth_w), dtype=np.uint16)
+        if u.size == 0:
+            return depth
+        z_mm = (z * 1000.0) if self._z_unit == 'm' else z
+        lin = (v * self._depth_w + u).astype(np.int64)
+        order = np.argsort(lin)
+        lin_s, z_s = lin[order], z_mm[order]
+        uniq, first = np.unique(lin_s, return_index=True)
+        mins = np.minimum.reduceat(z_s, first)
+        depth.ravel()[uniq] = np.clip(mins, 0, 65535).astype(np.uint16)
+        return depth
+
+    def _erode_min(self, depth_u16: np.ndarray):
+        """깊이가 작은(가까운) 값을 국소적으로 확장시키는 최소필터."""
+        k = self._erode_k
+        if k <= 0: 
+            return depth_u16
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2*k+1, 2*k+1))
+        d = depth_u16.copy()
+        zero = (d == 0)
+        d[zero] = 65535
+        d = cv2.erode(d, kernel)
+        d[zero] = 0
+        return d
+
+    def _occlusion_prune_memory(self, now_xyz_base: np.ndarray):
+        """현재 프레임 기반 Z_now로 메모리(_mem_*)에서 '앞에 있는' 과거 점 삭제."""
+        if (not self.enable_occlusion_prune) or self._mem_keys.size == 0:
+            return
+        if now_xyz_base.size == 0:
+            return
+        # 1) now(Base->Cam) → Z_now
+        Nn = now_xyz_base.shape[0]
+        xyz_now_cam = (self._base_to_cam @ np.c_[now_xyz_base[:,:3], np.ones((Nn,1))].T).T[:, :3]
+        u_n, v_n, z_n, _ = self._project_points_cam(xyz_now_cam)
+        Z_now = self._rasterize_min(u_n, v_n, z_n)
+        Z_now = self._erode_min(Z_now)  # 노이즈 완화
+
+        # 2) mem(Base->Cam) 픽셀 비교
+        Nm = self._mem_xyz.shape[0]
+        xyz_mem_cam = (self._base_to_cam @ np.c_[self._mem_xyz, np.ones((Nm,1))].T).T[:, :3]
+        u_m, v_m, z_m, map_idx = self._project_points_cam(xyz_mem_cam)
+        if u_m.size == 0:
+            return
+
+        z_mem_mm = (z_m * 1000.0) if self._z_unit == 'm' else z_m
+        z_now_at = self._patch_min(Z_now, u_m, v_m, self.occl_patch_radius).astype(np.float64)
+
+        # 삭제 규칙: now 유효 & (mem이 충분히 앞) → 삭제
+        del_local = (z_now_at > 0) & (z_mem_mm < z_now_at)
+        
+        if not np.any(del_local):
+            return
+
+        keep_global = np.ones(self._mem_xyz.shape[0], dtype=bool)
+        keep_global[map_idx[del_local]] = False
+
+        # 실제 삭제
+        self._mem_keys = self._mem_keys[keep_global]
+        self._mem_xyz  = self._mem_xyz[keep_global]
+        self._mem_rgb  = self._mem_rgb[keep_global]
+        self._mem_step = self._mem_step[keep_global]
+
+        if hasattr(self, "_mem_seen"):
+            self._mem_seen = self._mem_seen[keep_global]
+        if hasattr(self, "_mem_miss"):
+            self._mem_miss = self._mem_miss[keep_global]
+
+
     def reset_temporal(self):
         """Call at the start of each episode."""
         self._frame_idx = 0
@@ -160,14 +331,12 @@ class PointCloudPreprocessor:
             self._mem_step = np.full((xyz_new.shape[0],), now_step, dtype=np.int32)
             return
         
-        # 교집합: 기존 → 현재로 덮어쓰기 (c=1과 동일)
         common, idx_mem, idx_new = np.intersect1d(self._mem_keys, keys_new, return_indices=True)
         if common.size > 0:
             self._mem_xyz[idx_mem]  = xyz_new[idx_new]
             self._mem_rgb[idx_mem]  = rgb_new[idx_new]
             self._mem_step[idx_mem] = now_step
         
-                # 신규만 append
         mask_new_only = np.ones(keys_new.shape[0], dtype=bool)
         if common.size > 0:
             mask_new_only[idx_new] = False
@@ -177,7 +346,7 @@ class PointCloudPreprocessor:
             self._mem_rgb  = np.concatenate([ self._mem_rgb,  rgb_new[mask_new_only] ], axis=0)
             self._mem_step = np.concatenate([ self._mem_step,
                                               np.full((mask_new_only.sum(),), now_step, dtype=np.int32) ], axis=0)
-    # === 주기적(prune_every) 프루닝: decay^age < c_min 동일 의미 ===
+    
     def _prune_mem(self, now_step: int):
         if self._mem_keys.size == 0:
             return
@@ -210,12 +379,18 @@ class PointCloudPreprocessor:
 
         out = np.concatenate([xyz, rgb, c[:,None]], axis=1).astype(np.float32, copy=False)
 
-        # budget(있으면)
-        if self._temporal_max_points is not None and out.shape[0] > self._temporal_max_points:
-            idx = np.random.choice(out.shape[0], self._temporal_max_points, replace=False)
-            out = out[idx]
         return out
 
+    def _patch_min(self, Z: np.ndarray, u: np.ndarray, v: np.ndarray, r: int):
+        H, W = Z.shape
+        out = np.zeros_like(u, dtype=np.float64)
+        for i in range(u.size):
+            u0 = max(0, u[i]-r); u1 = min(W-1, u[i]+r)
+            v0 = max(0, v[i]-r); v1 = min(H-1, v[i]+r)
+            patch = Z[v0:v1+1, u0:u1+1]
+            nz = patch[patch>0]
+            out[i] = float(nz.min()) if nz.size else 0.0
+        return out
         
     def process(self, points):
         """
@@ -227,9 +402,7 @@ class PointCloudPreprocessor:
         Returns:
             processed_points: numpy array of processed pointcloud
         """
-        import pcdp.common.mono_time as mono_time
         if points is None or len(points) == 0:
-            # temporal 켜져 있으면 (0,7), 아니면 기존처럼 (target_num_points, 6)
             if self.enable_temporal and self.export_mode == 'fused':
                 self._frame_idx += 1
                 return np.zeros((0,7), dtype=np.float32)
@@ -261,6 +434,10 @@ class PointCloudPreprocessor:
         # 1) 프레임 내 voxel-unique (동일 voxel 중복 제거 – 기능 동일)
         xyz_now = points[:, :3]
         rgb_now = points[:, 3:6]
+
+        if self.enable_occlusion_prune:
+            self._occlusion_prune_memory(xyz_now)
+
         xyz_now, rgb_now = self._frame_unique(xyz_now, rgb_now)
 
         # 2) 메모리 병합: 겹치면 '현재'로 갱신 (latest-wins = c 큰 값 유지와 동일 의미)
@@ -274,11 +451,11 @@ class PointCloudPreprocessor:
         
         # (선택) 시각화 로그: 과거일수록 페이드
         if self.verbose and out.shape[0] > 0:
-            rgb = out[:, 3:6].astype(np.float32, copy=False)
+            out_dbg = out.copy()
+            rgb = out_dbg[:, 3:6].astype(np.float32, copy=False)
             c   = np.clip(out[:, 6:7], 0.0, 1.0)
-            scale255 = (rgb.max() > 1.0 + 1e-6)
-            s = 255.0 if scale255 else 1.0
-            out[:, 3:6] = np.clip((rgb/s) * c, 0.0, 1.0) * s
+            s = 255.0 if (rgb.max() > 1.0 + 1e-6) else 1.0
+            out_dbg[:, 3:6] = np.clip((rgb/s) * c, 0.0, 1.0) * s
             print(f"time0: {t1 - t0}")
             print(f"time1: {t2 - t1}")
             print(f"time2: {t3 - t2}")

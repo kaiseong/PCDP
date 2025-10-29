@@ -56,8 +56,18 @@ dataset:
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}
     temporal_decay: 0.95
-    temporal_c_min: 0.20
-    # temporal_max_points: 500000
+
+    enable_occlusion_prune: true
+    depth_width: 320
+    depth_height: 288
+    K_depth: [[252.69204711914062, 0.0, 166.12030029296875],
+              [0.0, 252.65277099609375, 176.21173095703125],
+              [0.0, 0.0, 1.0]]
+    dist_depth: null
+    tau_prune_mm: 15.0
+    tau_same_mm: 5.0
+    erode_k: 1
+    z_unit: m
 
     # Camera to robot transformation matrix (4x4). 
     extrinsics_matrix:
