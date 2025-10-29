@@ -13,8 +13,8 @@ from piper_sdk import *
 from pcdp.shared_memory.shared_memory_queue import (
     SharedMemoryQueue, Empty)
 from pcdp.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-# from pcdp.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
-from pcdp.common.only_pose_trajectory_interpolator import PoseTrajectoryInterpolator
+from pcdp.common.no_pose_trajectory_interpolator import PoseTrajectoryInterpolator
+# from pcdp.common.only_pose_trajectory_interpolator import PoseTrajectoryInterpolator
 # from pcdp.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 import pcdp.common.mono_time as mono_time
 from pcdp.real_world.pinocchio_ik_controller import PinocchioIKController

@@ -49,7 +49,7 @@ class SPECPolicyMono(BasePointCloudPolicy):
             dim_feedforward = 2048,
             dropout = 0.1,
             # ---- 입력 전처리 ----
-            enable_c_gate: bool = True,         # True면 rgb *= c
+            enable_c_gate: bool = False,         # True면 rgb *= c
             # ---- 인코더 토큰 상한(YAML에서 조절) ----
             encoder_max_num_token: int = 100,
             ):
@@ -129,7 +129,6 @@ class SPECPolicyMono(BasePointCloudPolicy):
         src, pos, pad = self.encoder(
             cloud, batch_size=batch_size, max_num_token=self.encoder_max_num_token
         )  # shapes: [B, N, D], [B, N, D], [B, N]
-        print(f"pad: {pad}")
 
         # 5) RISE Transformer + readout
         readout_seq = self.transformer(src, pad, self.readout_embed.weight, pos)[-1]  # [B,1,D]
