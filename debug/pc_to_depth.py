@@ -40,7 +40,7 @@ camera_to_base = np.array([
 ], dtype=np.float64)
 
 workspace_bounds = np.array([
-    [ 0.000, 0.715],   # X (m)
+    [ 0.132, 0.715],   # X (m)
     [-0.400, 0.350],   # Y (m)
     [-0.100, 0.600],   # Z (m)
 ], dtype=np.float64)
@@ -292,7 +292,8 @@ def interactive_visualize_with_gripper(obs_episode):
         sor_std=1.7,
         enable_temporal=True,
         export_mode="fused",
-        verbose=True,
+        use_cuda=True,
+        verbose=False,
         temporal_decay=0.95,
         depth_width=DEPTH_W, depth_height=DEPTH_H,
         K_depth=K_depth, dist_depth=DIST_DEPTH
@@ -476,8 +477,9 @@ def interactive_visualize_with_gripper(obs_episode):
             mask_R = points_in_roi_local(pts_local, c_right_t, extent)
             N_L, N_R = int(mask_L.sum()), int(mask_R.sum())
             S = min(N_L, N_R)
-            print(f"[{step}/{num_steps-1}] width={width_val:.4f}m → gap={gap_t:.4f}m | N_L={N_L}, N_R={N_R}, S={S}")
-            print(f"effort: {effort_val}")
+            print(f"[{step}/{num_steps-1}]")
+            # print(f"[{step}/{num_steps-1}] width={width_val:.4f}m → gap={gap_t:.4f}m | N_L={N_L}, N_R={N_R}, S={S}")
+            # print(f"effort: {effort_val}")
 
             controller.vis_changed = False
 

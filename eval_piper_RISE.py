@@ -191,7 +191,8 @@ def main(input, output, match_episode, frequency, save_data):
                         
                         # 포인트클라우드 전처리
                         pc = pc_preprocessor.process(pc_raw)
-                        coords = np.ascontiguousarray(pc[:, :3] / voxel_size, dtype=np.int32)
+                        coords = np.floor(pc[:, :3] / voxel_size).astype(np.int32)
+                        coords = np.ascontiguousarray(coords)
                         feats = pc.astype(np.float32)
                         coords_batch, feats_batch = ME.utils.sparse_collate([coords], [feats])
                         cloud_data = ME.SparseTensor(

@@ -16,6 +16,8 @@ try:
 except ImportError:
     PYTORCH3D_AVAILABLE = False
     print("Warning: pytorch3d not available. FPS will use fallback method.")
+
+
 from pcdp.common import RISE_transformation as rise_tf
 from pcdp.common.replay_buffer import ReplayBuffer, get_optimal_chunks
 from pcdp.common.RISE_transformation import xyz_rot_transform
@@ -32,9 +34,12 @@ class PointCloudPreprocessor:
     When enable_temporal=True and export_mode='fused', each call to `process(points)`
     updates a stateful voxel map (per episode) with exponential decay and returns
     an Nx7 array: [x,y,z,r,g,b,c], where `c` is temporal confidence (recency).
+
+    추가:
+    - 미관측 누적 프루닝(miss counter): 같은 메모리 점이 연속 K프레임 동안 관측되지 않으면 삭제.
     """
 
-    # ----------[ NEW ]: Orbbec→OpenCV 변환 유틸 ----------
+    # ---------- Orbbec→OpenCV 변환 유틸 ----------
     @staticmethod
     def _is_orbbec_intrinsics(obj) -> bool:
         return all(hasattr(obj, a) for a in ("fx", "fy", "cx", "cy"))
@@ -45,7 +50,6 @@ class PointCloudPreprocessor:
 
     @staticmethod
     def _as_cv_K_from_orbbec_intrinsics(orbbec_intr):
-        # OBCameraIntrinsic → OpenCV K
         K = np.array([[float(orbbec_intr.fx), 0.0, float(orbbec_intr.cx)],
                       [0.0, float(orbbec_intr.fy), float(orbbec_intr.cy)],
                       [0.0, 0.0, 1.0]], dtype=np.float64)
@@ -61,11 +65,10 @@ class PointCloudPreprocessor:
 
     @staticmethod
     def convert_orbbec_depth_params(depth_intrinsics, depth_distortion):
-        """외부에서 편히 쓰는 변환기: (Orbbec intr, dist) -> (K(3x3), dist(8,))."""
         K = PointCloudPreprocessor._as_cv_K_from_orbbec_intrinsics(depth_intrinsics)
         dist = PointCloudPreprocessor._as_cv_dist_from_orbbec_distortion(depth_distortion)
         return K, dist
-    # -----------------------------------------------------
+    # -------------------------------------------------
 
     def __init__(self, 
                 enable_sampling=False,
@@ -82,19 +85,21 @@ class PointCloudPreprocessor:
                 enable_temporal=False,
                 export_mode='off',
                 temporal_voxel_size=0.005,
-                temporal_decay=0.90,
+                temporal_decay=0.96,
                 temporal_c_min=0.20,
-                # hmm...
                 temporal_prune_every: int=1,
                 stable_export: bool = False,
                 enable_occlusion_prune: bool = True,
                 depth_width: Optional[int] = 320,
                 depth_height: Optional[int] = 288,
                 K_depth: Optional[Sequence[Sequence[float]]] = None,    # 3x3
-                dist_depth: Optional[Sequence[float]] = None,           # None or 5/8계수
+                dist_depth: Optional[Sequence[float]] = None,           # None or 4/5/8계수
                 erode_k: int = 1,
-                z_unit: str = 'm',   # 'm' or 'mm',
-                occl_patch_radius: int = 2
+                z_unit: str = 'm',   # 'm' or 'mm'
+                occl_patch_radius: int = 2,
+                # ▼ 신규 파라미터
+                miss_prune_frames: int = 20,   # 연속 미관측 프레임 임계
+                miss_min_age: int = 2         # 너무 새로 추가된 점은 보호
                 ):
 
         if extrinsics_matrix is None:
@@ -110,9 +115,9 @@ class PointCloudPreprocessor:
         # Default workspace bounds
         if workspace_bounds is None:
             self.workspace_bounds = [
-                [-0.000, 0.715],    # X range (m)
+                [0.132, 0.715],    # X range (m)
                 [-0.400, 0.350],    # Y range (m)
-                [-0.100, 0.400]     # z range
+                [-0.100, 0.400]     # Z range (m)
             ]
         else:
             self.workspace_bounds = workspace_bounds
@@ -133,16 +138,15 @@ class PointCloudPreprocessor:
         if dist_depth is None:
             # [k1 k2 p1 p2 k3 k4 k5 k6]
             self._dist_depth = np.array(
-            [11.690222, 5.343991, 0.000065, 0.000014, 0.172997, 12.017323, 9.254467, 1.165690], dtype=np.float64)
+                [11.690222, 5.343991, 0.000065, 0.000014, 0.172997, 12.017323, 9.254467, 1.165690],
+                dtype=np.float64)
         else:
             if self._is_orbbec_distortion(dist_depth):
                 self._dist_depth = self._as_cv_dist_from_orbbec_distortion(dist_depth)
             else:
                 self._dist_depth = np.asarray(dist_depth, dtype=np.float64)
                 if self._dist_depth.size not in (4, 5, 8):
-                    raise ValueError(f"dist_depth must have 5 or 8 coeffs, got {self._dist_depth.size}")
-
-
+                    raise ValueError(f"dist_depth must have 4/5/8 coeffs, got {self._dist_depth.size}")
 
         self.target_num_points = target_num_points
         self.nb_points = nb_points
@@ -151,7 +155,7 @@ class PointCloudPreprocessor:
         self.enable_cropping = enable_cropping
         self.enable_sampling = enable_sampling
         self.enable_filter = enable_filter
-        self.use_cuda = use_cuda and torch.cuda.is_available() and PYTORCH3D_AVAILABLE
+        self.use_cuda = bool(use_cuda and torch.cuda.is_available())
         self.verbose = verbose
         
         # temporal memory
@@ -160,19 +164,23 @@ class PointCloudPreprocessor:
         self._temporal_voxel_size = float(temporal_voxel_size)
         self._temporal_decay = float(temporal_decay)
         self._temporal_c_min = float(temporal_c_min)
-        
         self._prune_every = int(max(1, temporal_prune_every))
         self._stable_export = bool(stable_export)
             
-        # occlusion prune 설정
+        # occlusion prune
         self.enable_occlusion_prune = bool(enable_occlusion_prune)
         self._depth_w = int(depth_width) 
         self._depth_h = int(depth_height) 
         self._erode_k = int(erode_k)
         self._z_unit = str(z_unit)
         self.occl_patch_radius = int(occl_patch_radius)
+        
 
-        # extrinsics_matrix는 Camera->Base 이므로 Base->Camera를 미리 준비
+        # miss-based prune params
+        self._miss_prune_frames = int(miss_prune_frames)
+        self._miss_min_age = int(miss_min_age)
+
+        # Base->Camera 사전 계산
         self._base_to_cam = None
         if self.enable_occlusion_prune:
             if self.extrinsics_matrix is None:
@@ -186,6 +194,13 @@ class PointCloudPreprocessor:
         self._mem_xyz = np.empty((0, 3), dtype=np.float32)
         self._mem_rgb = np.empty((0, 3), dtype=np.float32)
         self._mem_step = np.empty((0, ), dtype=np.int32)
+        self._mem_miss = np.empty((0, ), dtype=np.int16)  # 연속 미관측 카운터
+
+        # 
+        self._mem_u    = np.empty((0,), dtype=np.int32)     # -1이면 화면 밖
+        self._mem_v    = np.empty((0,), dtype=np.int32)     # -1이면 화면 밖
+        self._mem_zcam = np.empty((0,), dtype=np.float32)   # 0이면 invalid
+
 
         if 0.0 < self._temporal_decay < 1.0 and 0.0 < self._temporal_c_min < 1.0:
             self._max_age_steps = int(np.floor(np.log(self._temporal_c_min)/np.log(self._temporal_decay)))
@@ -198,42 +213,18 @@ class PointCloudPreprocessor:
             print(f"  - Cropping: {self.enable_cropping}")
             print(f"  - Sampling: {self.enable_sampling} (target: {self.target_num_points})")
             print(f"  - CUDA: {self.use_cuda}")
-            
-    def __call__(self, points):
-        """Process pointcloud through the full pipeline."""
-        return self.process(points)
-    
-    def _project_points_cam(self, xyz_cam: np.ndarray):
-        """카메라 좌표계 3D -> (u,v,z, inb_mask). z는 z_unit에 맞춘 float."""
         
-        if xyz_cam.size == 0:
-            return (np.array([], np.int32),)*2 + (np.array([], np.float64), np.array([], bool))
-        valid = xyz_cam[:, 2] > 0.0
-        pts = xyz_cam[valid]
-        if pts.size == 0:
-            return (np.array([], np.int32),)*2 + (np.array([], np.float64), np.zeros(0, bool))
-        rvec = np.zeros((3,1), np.float64); tvec = np.zeros((3,1), np.float64)
-        dist = np.zeros(5, np.float64) if self._dist_depth is None else self._dist_depth
-        imgpts, _ = cv2.projectPoints(pts.reshape(-1,1,3), rvec, tvec, self._K_depth, dist)
-        uv = imgpts.reshape(-1,2)
-        u = np.rint(uv[:,0]).astype(np.int32)
-        v = np.rint(uv[:,1]).astype(np.int32)
-        inb = (u >= 0) & (u < self._depth_w) & (v >= 0) & (v < self._depth_h)
-        return u[inb], v[inb], pts[inb, 2].astype(np.float64), valid.nonzero()[0][inb]
+        # === GPU-only guard for time3 path ===
+        if (self.enable_temporal and self.export_mode == 'fused') or self.enable_occlusion_prune:
+            if not self.use_cuda:
+                raise RuntimeError(
+                    "GPU-only path enabled (temporal fused / occlusion prune). "
+                    "Set use_cuda=True and ensure CUDA is available."
+                )
+            self._maybe_init_torch_camera()
 
-    def _rasterize_min(self, u: np.ndarray, v: np.ndarray, z: np.ndarray):
-        """Z-buffer(min)로 깊이 이미지(uint16, mm) 생성."""
-        depth = np.zeros((self._depth_h, self._depth_w), dtype=np.uint16)
-        if u.size == 0:
-            return depth
-        z_mm = (z * 1000.0) if self._z_unit == 'm' else z
-        lin = (v * self._depth_w + u).astype(np.int64)
-        order = np.argsort(lin)
-        lin_s, z_s = lin[order], z_mm[order]
-        uniq, first = np.unique(lin_s, return_index=True)
-        mins = np.minimum.reduceat(z_s, first)
-        depth.ravel()[uniq] = np.clip(mins, 0, 65535).astype(np.uint16)
-        return depth
+    def __call__(self, points):
+        return self.process(points)
 
     def _erode_min(self, depth_u16: np.ndarray):
         """깊이가 작은(가까운) 값을 국소적으로 확장시키는 최소필터."""
@@ -248,48 +239,123 @@ class PointCloudPreprocessor:
         d[zero] = 0
         return d
 
-    def _occlusion_prune_memory(self, now_xyz_base: np.ndarray):
-        """현재 프레임 기반 Z_now로 메모리(_mem_*)에서 '앞에 있는' 과거 점 삭제."""
-        if (not self.enable_occlusion_prune) or self._mem_keys.size == 0:
+    # --- [NEW] Torch 카메라 버퍼 준비(한 번만) ---
+    def _maybe_init_torch_camera(self):
+        if not self.use_cuda:
             return
-        if now_xyz_base.size == 0:
-            return
-        # 1) now(Base->Cam) → Z_now
-        Nn = now_xyz_base.shape[0]
-        xyz_now_cam = (self._base_to_cam @ np.c_[now_xyz_base[:,:3], np.ones((Nn,1))].T).T[:, :3]
-        u_n, v_n, z_n, _ = self._project_points_cam(xyz_now_cam)
-        Z_now = self._rasterize_min(u_n, v_n, z_n)
-        Z_now = self._erode_min(Z_now)  # 노이즈 완화
+        dev = torch.device("cuda")
+        self._device = dev
 
-        # 2) mem(Base->Cam) 픽셀 비교
-        Nm = self._mem_xyz.shape[0]
-        xyz_mem_cam = (self._base_to_cam @ np.c_[self._mem_xyz, np.ones((Nm,1))].T).T[:, :3]
-        u_m, v_m, z_m, map_idx = self._project_points_cam(xyz_mem_cam)
-        if u_m.size == 0:
-            return
+        # K / dist 텐서 준비
+        self._K_depth_t = torch.tensor(self._K_depth, dtype=torch.float32, device=dev)
 
-        z_mem_mm = (z_m * 1000.0) if self._z_unit == 'm' else z_m
-        z_now_at = self._patch_min(Z_now, u_m, v_m, self.occl_patch_radius).astype(np.float64)
+        if self._dist_depth is None:
+            dist8 = np.zeros(8, dtype=np.float64)
+        else:
+            d = self._dist_depth
+            if d.size == 4:
+                dist8 = np.array([d[0], d[1], d[2], d[3], 0, 0, 0, 0], dtype=np.float64)
+            elif d.size == 5:
+                dist8 = np.array([d[0], d[1], d[2], d[3], d[4], 0, 0, 0], dtype=np.float64)
+            elif d.size == 8:
+                dist8 = d.astype(np.float64, copy=False)
+            else:
+                dist8 = np.zeros(8, dtype=np.float64)
+        self._dist_depth_t = torch.tensor(dist8, dtype=torch.float32, device=dev)
 
-        # 삭제 규칙: now 유효 & (mem이 충분히 앞) → 삭제
-        del_local = (z_now_at > 0) & (z_mem_mm < z_now_at)
+        # Base→Cam 텐서는 있을 때만 생성 (occlusion prune에서만 필요)
+        if getattr(self, "_base_to_cam", None) is not None:
+            self._base_to_cam_t = torch.tensor(self._base_to_cam.astype(np.float32), device=dev)
+        else:
+            self._base_to_cam_t = None
+
+    # --- [NEW] OpenCV rational(8) 왜곡 모델 (Torch) ---
+    def _opencv_rational_distort_torch(self, xn: torch.Tensor, yn: torch.Tensor):
+        k = self._dist_depth_t  # [k1,k2,p1,p2,k3,k4,k5,k6]
+        k1, k2, p1, p2, k3, k4, k5, k6 = k
+        r2 = xn * xn + yn * yn
+        r4 = r2 * r2
+        r6 = r4 * r2
+        radial = (1 + k1 * r2 + k2 * r4 + k3 * r6) / (1 + k4 * r2 + k5 * r4 + k6 * r6)
+        x_tan = 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)
+        y_tan = p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn
+        xd = xn * radial + x_tan
+        yd = yn * radial + y_tan
+        return xd, yd
+
+    # --- [NEW] 카메라 좌표계 → 픽셀 (Torch) ---
+    def _project_points_cam_torch(self, xyz_cam_t: torch.Tensor):
+        # xyz_cam_t: (N,3) float32 CUDA
+        if xyz_cam_t.numel() == 0:
+            empty_i32 = np.array([], dtype=np.int32)
+            empty_f64 = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)  
+            return empty_i32, empty_i32, empty_f64, empty_int
+
+
+        z = xyz_cam_t[:, 2]
+        valid = z > 0.0
+        if torch.count_nonzero(valid) == 0:
+            empty_i32 = np.array([], dtype=np.int32)
+            empty_f64 = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)  
+            return empty_i32, empty_i32, empty_f64, empty_int
+
+        pts = xyz_cam_t[valid]  # (M,3)
+        xn = pts[:, 0] / pts[:, 2]
+        yn = pts[:, 1] / pts[:, 2]
+
+        if self._dist_depth is None:
+            xd, yd = xn, yn
+        else:
+            xd, yd = self._opencv_rational_distort_torch(xn, yn)
+
+        fx = self._K_depth_t[0, 0]; fy = self._K_depth_t[1, 1]
+        cx = self._K_depth_t[0, 2]; cy = self._K_depth_t[1, 2]
+
+        u = torch.round(fx * xd + cx).to(torch.int32)
+        v = torch.round(fy * yd + cy).to(torch.int32)
+
+        inb = (u >= 0) & (u < int(self._depth_w)) & (v >= 0) & (v < int(self._depth_h))
+        if torch.count_nonzero(inb) == 0:
+            empty_i32 = np.array([], dtype=np.int32)
+            empty_f64 = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)  
+            return empty_i32, empty_i32, empty_f64, empty_int
+
+        u = u[inb]
+        v = v[inb]
+        z_out = pts[inb, 2]
+
+        # 원래 인덱스로 복원
+        orig_idx = torch.nonzero(valid, as_tuple=False).squeeze(1)[inb]
+
+        orig_idx_np = orig_idx.detach().cpu().numpy().astype(np.int64)  # <-- int 인덱스
+        return (
+            u.detach().cpu().numpy(),
+            v.detach().cpu().numpy(),
+            z_out.detach().cpu().numpy().astype(np.float64),
+            orig_idx_np
+        )
         
-        if not np.any(del_local):
-            return
 
-        keep_global = np.ones(self._mem_xyz.shape[0], dtype=bool)
-        keep_global[map_idx[del_local]] = False
+    # --- [NEW] Base→Cam → 픽셀 (Torch) ---
+    def _project_base_to_cam_torch(self, xyz_base_np: np.ndarray):
+        if xyz_base_np.size == 0:
+            empty_i32 = np.array([], dtype=np.int32)
+            empty_f64 = np.array([], dtype=np.float64)
+            empty_int = np.array([], dtype=np.int64)  # <-- int 로
+            return empty_i32, empty_i32, empty_f64, empty_int
 
-        # 실제 삭제
-        self._mem_keys = self._mem_keys[keep_global]
-        self._mem_xyz  = self._mem_xyz[keep_global]
-        self._mem_rgb  = self._mem_rgb[keep_global]
-        self._mem_step = self._mem_step[keep_global]
+        self._maybe_init_torch_camera()
+        assert self._base_to_cam_t is not None, \
+            "Base→Cam not initialized. Provide extrinsics_matrix and enable_occlusion_prune=True."
 
-        if hasattr(self, "_mem_seen"):
-            self._mem_seen = self._mem_seen[keep_global]
-        if hasattr(self, "_mem_miss"):
-            self._mem_miss = self._mem_miss[keep_global]
+        xyz = torch.from_numpy(xyz_base_np.astype(np.float32, copy=False)).to(self._device)
+        ones = torch.ones((xyz.shape[0], 1), dtype=torch.float32, device=self._device)
+        xyz1 = torch.cat([xyz, ones], dim=1)  # (N,4)
+        xyz_cam = (xyz1 @ self._base_to_cam_t.T)[:, :3]  # (N,3)
+        return self._project_points_cam_torch(xyz_cam)
 
 
     def reset_temporal(self):
@@ -299,36 +365,80 @@ class PointCloudPreprocessor:
         self._mem_xyz   = np.empty((0, 3), dtype=np.float32)
         self._mem_rgb   = np.empty((0, 3), dtype=np.float32)
         self._mem_step  = np.empty((0,),  dtype=np.int32)
+        self._mem_miss  = np.empty((0,),  dtype=np.int16)
+
+        self._mem_u    = np.empty((0,), dtype=np.int32)
+        self._mem_v    = np.empty((0,), dtype=np.int32)
+        self._mem_zcam = np.empty((0,), dtype=np.float32)
 
     def voxel_keys_from_xyz(self, xyz:np.ndarray):
-        grid = np.floor(xyz / self._temporal_voxel_size).astype(np.int32, copy=False) # (N, 3) int32
+        grid = np.floor(xyz / self._temporal_voxel_size).astype(np.int32, copy=False) # (N, 3)
         grid = np.ascontiguousarray(grid)
         keys = grid.view(np.dtype((np.void, 12))).ravel() # (N, ) 12byte key
         return keys
-    
-    def _frame_unique(self, xyz: np.ndarray, rgb: np.ndarray, last_wins: bool=False):
-        if xyz.shape[0] == 0:
-            return xyz, rgb
-        keys = self.voxel_keys_from_xyz(xyz)
+
+    def _frame_unique_torch(self, xyz_np: np.ndarray, rgb_np: np.ndarray, last_wins: bool=False):
+        """
+        CUDA로 프레임 내 voxel-unique 수행 + keys_new 생성.
+        returns: (xyz_unique_np, rgb_unique_np, keys_new_np_void)
+        """
+        if xyz_np.shape[0] == 0:
+            empty_keys = np.empty((0,), dtype=np.dtype((np.void, 12)))
+            return xyz_np, rgb_np, empty_keys
+
+        device = torch.device("cuda")
+        xyz_t = torch.from_numpy(xyz_np.astype(np.float32, copy=False)).to(device)
+
+        # grid = floor(xyz / voxel), int32
+        grid_t = torch.floor(xyz_t / float(self._temporal_voxel_size)).to(torch.int32)  # (N,3)
+
+        # unique over rows (dim=0) — 인덱스는 scatter_reduce로 구함
+        uniq, inv = torch.unique(grid_t, dim=0, return_inverse=True)
+        idx_all = torch.arange(grid_t.shape[0], device=device, dtype=torch.int64)
+
         if last_wins:
-            # 뒤집어서 unique → 다시 뒤집어 인덱스 복원
-            rev = keys[::-1]
-            _, idx_rev = np.unique(rev, return_index=True)
-            uniq_idx = (len(keys) - 1) - idx_rev
+            # 각 uniq에 대해 마지막 인덱스
+            idx_sel = torch.zeros(uniq.shape[0], dtype=torch.int64, device=device)
+            idx_sel.scatter_reduce_(0, inv, idx_all, reduce='amax', include_self=False)
         else:
-            _, uniq_idx = np.unique(keys, return_index=True)
-        return xyz[uniq_idx], rgb[uniq_idx]
-    
-    def _merge_into_mem(self, xyz_new: np.ndarray, rgb_new: np.ndarray, now_step: int):
+            # 각 uniq에 대해 첫 인덱스
+            big = torch.iinfo(torch.int64).max
+            idx_sel = torch.full((uniq.shape[0],), big, dtype=torch.int64, device=device)
+            idx_sel.scatter_reduce_(0, inv, idx_all, reduce='amin', include_self=True)
+
+        idx_np = idx_sel.detach().cpu().numpy().astype(np.int64)
+        xyz_unique = xyz_np[idx_np]
+        rgb_unique = rgb_np[idx_np]
+
+        # keys_new: (U,3) int32 -> np.void(12B)
+        grid_sel = uniq.detach().cpu().numpy().astype(np.int32)        # (U,3) int32
+        keys_new = np.ascontiguousarray(grid_sel).view(np.dtype((np.void, 12))).ravel()
+
+        return xyz_unique, rgb_unique, keys_new
+
+
+    def _merge_into_mem(self, xyz_new: np.ndarray, rgb_new: np.ndarray, now_step: int,
+                    keys_new: Optional[np.ndarray] = None):
         if xyz_new.shape[0] == 0:
             return
-        keys_new = self.voxel_keys_from_xyz(xyz_new)
+        if keys_new is None:
+            keys_new = self.voxel_keys_from_xyz(xyz_new)
+        
         
         if self._mem_keys.size == 0:
             self._mem_keys = keys_new.copy()
             self._mem_xyz  = xyz_new.astype(np.float32, copy=False).copy()
             self._mem_rgb  = rgb_new.astype(np.float32, copy=False).copy()
             self._mem_step = np.full((xyz_new.shape[0],), now_step, dtype=np.int32)
+            self._mem_miss = np.zeros((xyz_new.shape[0],), dtype=np.int16)
+            if self.enable_occlusion_prune:
+                u_add, v_add, z_add = self._project_and_pack(self._mem_xyz)
+                self._mem_u, self._mem_v, self._mem_zcam = u_add, v_add, z_add
+            else:
+                # pruner 비활성화 시에도 일관된 상태를 위해 빈 캐시로 맞춰둠
+                self._mem_u    = np.empty((0,), dtype=np.int32)
+                self._mem_v    = np.empty((0,), dtype=np.int32)
+                self._mem_zcam = np.empty((0,), dtype=np.float32)
             return
         
         common, idx_mem, idx_new = np.intersect1d(self._mem_keys, keys_new, return_indices=True)
@@ -336,16 +446,35 @@ class PointCloudPreprocessor:
             self._mem_xyz[idx_mem]  = xyz_new[idx_new]
             self._mem_rgb[idx_mem]  = rgb_new[idx_new]
             self._mem_step[idx_mem] = now_step
-        
+            self._mem_miss[idx_mem] = 0
+            # [ADD] 공통 갱신분만 투영 캐시 갱신
+            if self.enable_occlusion_prune:
+                u_upd, v_upd, z_upd = self._project_and_pack(xyz_new[idx_new])
+                self._mem_u[idx_mem]    = u_upd
+                self._mem_v[idx_mem]    = v_upd
+                self._mem_zcam[idx_mem] = z_upd
+
         mask_new_only = np.ones(keys_new.shape[0], dtype=bool)
         if common.size > 0:
             mask_new_only[idx_new] = False
         if mask_new_only.any():
-            self._mem_keys = np.concatenate([ self._mem_keys, keys_new[mask_new_only] ], axis=0)
-            self._mem_xyz  = np.concatenate([ self._mem_xyz,  xyz_new[mask_new_only] ], axis=0)
-            self._mem_rgb  = np.concatenate([ self._mem_rgb,  rgb_new[mask_new_only] ], axis=0)
-            self._mem_step = np.concatenate([ self._mem_step,
-                                              np.full((mask_new_only.sum(),), now_step, dtype=np.int32) ], axis=0)
+            add_xyz  = xyz_new[mask_new_only]        # [FIX] 누락된 정의
+            add_rgb  = rgb_new[mask_new_only]
+            add_keys = keys_new[mask_new_only]
+            self._mem_keys = np.concatenate([self._mem_keys, add_keys], axis=0)
+            self._mem_xyz  = np.concatenate([self._mem_xyz,  add_xyz], axis=0)
+            self._mem_rgb  = np.concatenate([self._mem_rgb,  add_rgb], axis=0)
+            self._mem_step = np.concatenate([self._mem_step,
+                                             np.full((add_xyz.shape[0],), now_step, dtype=np.int32)], axis=0)
+            self._mem_miss = np.concatenate([self._mem_miss,
+                                             np.zeros((add_xyz.shape[0],), dtype=np.int16)], axis=0)
+            # [ADD] 신규분만 투영 캐시 append
+            if self.enable_occlusion_prune: 
+                u_add, v_add, z_add = self._project_and_pack(add_xyz)
+                self._mem_u    = np.concatenate([self._mem_u,    u_add], axis=0)
+                self._mem_v    = np.concatenate([self._mem_v,    v_add], axis=0)
+                self._mem_zcam = np.concatenate([self._mem_zcam, z_add], axis=0)
+
     
     def _prune_mem(self, now_step: int):
         if self._mem_keys.size == 0:
@@ -355,10 +484,8 @@ class PointCloudPreprocessor:
         age = now_step - self._mem_step
         keep = (age <= self._max_age_steps)
         if not np.all(keep):
-            self._mem_keys = self._mem_keys[keep]
-            self._mem_xyz  = self._mem_xyz[keep]
-            self._mem_rgb  = self._mem_rgb[keep]
-            self._mem_step = self._mem_step[keep]
+            self._delete_mask(keep)
+        
 
     def _export_array_from_mem(self, now_step: int) -> np.ndarray:
         N = self._mem_keys.size
@@ -367,9 +494,8 @@ class PointCloudPreprocessor:
         age = (now_step - self._mem_step).astype(np.float32)
         c   = (self._temporal_decay** age).astype(np.float32, copy=False)  # (N,)
 
-        # stable order 원하면 키 기준 정렬
         if self._stable_export:
-            order = np.argsort(self._mem_keys)  # 바이트키 정렬(결정적)
+            order = np.argsort(self._mem_keys)
             xyz = self._mem_xyz[order]
             rgb = self._mem_rgb[order]
             c   = c[order]
@@ -378,27 +504,137 @@ class PointCloudPreprocessor:
             rgb = self._mem_rgb
 
         out = np.concatenate([xyz, rgb, c[:,None]], axis=1).astype(np.float32, copy=False)
-
         return out
 
-    def _patch_min(self, Z: np.ndarray, u: np.ndarray, v: np.ndarray, r: int):
-        H, W = Z.shape
-        out = np.zeros_like(u, dtype=np.float64)
-        for i in range(u.size):
-            u0 = max(0, u[i]-r); u1 = min(W-1, u[i]+r)
-            v0 = max(0, v[i]-r); v1 = min(H-1, v[i]+r)
-            patch = Z[v0:v1+1, u0:u1+1]
-            nz = patch[patch>0]
-            out[i] = float(nz.min()) if nz.size else 0.0
-        return out
-        
+
+    def _rasterize_min_float_torch(self, u: np.ndarray, v: np.ndarray, z_m: np.ndarray, H: int, W: int):
+        assert self.use_cuda, "GPU-only path: _rasterize_min_float_torch requires CUDA"
+        if u.size == 0:
+            return np.zeros((H, W), dtype=np.float32)
+
+        device = self._device  # set in _maybe_init_torch_camera
+        pix = torch.from_numpy((v * W + u).astype(np.int64)).to(device, non_blocking=True)
+        zt  = torch.from_numpy(z_m.astype(np.float32, copy=False)).to(device, non_blocking=True)
+
+        Z = torch.full((H * W,), float("inf"), device=device, dtype=torch.float32)
+        # amin reduce (PyTorch 2.x: scatter_reduce, 1.13~ 호환용 try/except 유지)
+        try:
+            Z = torch.scatter_reduce(Z, 0, pix, zt, reduce='amin', include_self=True)
+        except TypeError:
+            Z.scatter_reduce_(0, pix, zt, reduce='amin', include_self=True)
+
+        Z = Z.view(H, W)
+        Z[torch.isinf(Z)] = 0.0
+        return Z.detach().cpu().numpy()
+
+
+    def _min_filter2d_float_torch(self, Z: np.ndarray, k: int):
+        assert self.use_cuda, "GPU-only path: _min_filter2d_float_torch requires CUDA"
+        if k <= 1:
+            return Z
+        import torch.nn.functional as F
+
+        device = self._device
+        Zt = torch.from_numpy(Z.astype(np.float32, copy=False)).to(device, non_blocking=True)
+        sent = torch.tensor(1e6, device=device, dtype=torch.float32)
+
+        Zt = torch.where(Zt <= 0.0, sent, Zt)  # zeros -> sentinel
+
+        pad = k // 2
+        Zn = (-Zt).view(1, 1, *Zt.shape)
+        Zn = F.pad(Zn, (pad, pad, pad, pad), mode='replicate')
+        Zmax = F.max_pool2d(Zn, kernel_size=k, stride=1, padding=0)
+        Zmin = (-Zmax).squeeze(0).squeeze(0)
+
+        Zmin = torch.where(Zmin >= sent * 0.999, torch.tensor(0.0, device=device), Zmin)
+        return Zmin.detach().cpu().numpy()
+
+
+
+    def _project_and_pack(self, xyz_base: np.ndarray):
+        assert self.use_cuda, "GPU-only path: _project_and_pack requires CUDA"
+        n = xyz_base.shape[0]
+        u_arr = np.full((n,), -1, dtype=np.int32)
+        v_arr = np.full((n,), -1, dtype=np.int32)
+        z_arr = np.zeros((n,), dtype=np.float32)
+
+        u, v, z, in_idx = self._project_base_to_cam_torch(xyz_base)
+        if in_idx.size > 0:
+            u_arr[in_idx] = u
+            v_arr[in_idx] = v
+            z_arr[in_idx] = z.astype(np.float32, copy=False)
+        return u_arr, v_arr, z_arr
+
+
+    # [ADD] 공통 삭제 유틸: keep_mask로 모든 버퍼 동기 슬라이싱
+    def _delete_mask(self, keep_mask: np.ndarray):
+        self._mem_keys = self._mem_keys[keep_mask]
+        self._mem_xyz  = self._mem_xyz[keep_mask]
+        self._mem_rgb  = self._mem_rgb[keep_mask]
+        self._mem_step = self._mem_step[keep_mask]
+        self._mem_miss = self._mem_miss[keep_mask]
+        self._mem_u    = self._mem_u[keep_mask]
+        self._mem_v    = self._mem_v[keep_mask]
+        self._mem_zcam = self._mem_zcam[keep_mask]
+
+    def _occlusion_prune_memory_fast(self, now_xyz_base: np.ndarray):
+        assert self.use_cuda, "GPU-only path: _occlusion_prune_memory_fast requires CUDA"
+        if (not self.enable_occlusion_prune) or self._mem_keys.size == 0:
+            return
+        if now_xyz_base.size == 0:
+            return
+
+        # 1) 현재 프레임 Z_full(미터) 1회 생성 (GPU-only)
+        u_now, v_now, z_now, _ = self._project_base_to_cam_torch(now_xyz_base)
+        if u_now.size == 0:
+            if self._mem_miss.size > 0:
+                self._mem_miss = np.minimum(self._mem_miss + 1, np.int16(32767))
+            return
+
+        Z_full = self._rasterize_min_float_torch(u_now, v_now, z_now, self._depth_h, self._depth_w)
+
+        # 2) 전역 패치-최소 1회 계산 (GPU-only)
+        k = 2 * self.occl_patch_radius + 1 if self.occl_patch_radius > 0 else 1
+        Z_min = self._min_filter2d_float_torch(Z_full, k)
+
+        # 3) 메모리 픽셀 캐시 인덱싱
+        valid_mem = (self._mem_u >= 0) & (self._mem_v >= 0) & (self._mem_zcam > 0.0)
+        if not np.any(valid_mem):
+            if self._mem_miss.size > 0:
+                self._mem_miss = np.minimum(self._mem_miss + 1, np.int16(32767))
+            return
+
+        u_m = self._mem_u[valid_mem]
+        v_m = self._mem_v[valid_mem]
+        z_m = self._mem_zcam[valid_mem]  # meters
+        z_now_at = Z_min[v_m, u_m]       # meters
+
+        # --- A) LOS 즉시 삭제: now>0 & (mem 앞) → 삭제
+        del_local_valid = (z_now_at > 0.0) & (z_m < z_now_at)
+        del_local_mask = np.zeros_like(valid_mem, dtype=bool)
+        del_local_mask[np.where(valid_mem)[0][del_local_valid]] = True
+
+        # --- B) miss 누적 업데이트
+        hit_mask_global = np.zeros_like(valid_mem, dtype=bool)
+        hit_mask_global[np.where(valid_mem)[0][z_now_at > 0.0]] = True
+        self._mem_miss[hit_mask_global] = 0
+        self._mem_miss[~hit_mask_global] = np.minimum(self._mem_miss[~hit_mask_global] + 1, np.int16(32767))
+
+        # --- C) 미관측 기반 삭제
+        age_all = (self._frame_idx - self._mem_step)
+        del_by_miss = (self._mem_miss >= self._miss_prune_frames) & (age_all >= self._miss_min_age)
+
+        # --- 최종 적용
+        if np.any(del_local_mask) or np.any(del_by_miss):
+            keep_global = ~(del_local_mask | del_by_miss)
+            self._delete_mask(keep_global)
+
+
     def process(self, points):
         """
         Process pointcloud through transformation, cropping, and sampling.
-        
         Args:
             points: numpy array of shape (N, 6) containing XYZRGB data
-            
         Returns:
             processed_points: numpy array of processed pointcloud
         """
@@ -431,25 +667,25 @@ class PointCloudPreprocessor:
 
         now_step = self._frame_idx
 
-        # 1) 프레임 내 voxel-unique (동일 voxel 중복 제거 – 기능 동일)
+        # 1) 프레임 내 voxel-unique
         xyz_now = points[:, :3]
         rgb_now = points[:, 3:6]
 
+        # 2) 프레임 시작 시 과거 잔상 정리(LOS + miss prune)
         if self.enable_occlusion_prune:
-            self._occlusion_prune_memory(xyz_now)
+            self._occlusion_prune_memory_fast(points[:, :3])
+        
+        assert self.use_cuda, "GPU-only path: fused temporal export requires CUDA"
+        xyz_now, rgb_now, keys_new = self._frame_unique_torch(xyz_now, rgb_now)
+        self._merge_into_mem(xyz_now, rgb_now, now_step, keys_new=keys_new)
 
-        xyz_now, rgb_now = self._frame_unique(xyz_now, rgb_now)
 
-        # 2) 메모리 병합: 겹치면 '현재'로 갱신 (latest-wins = c 큰 값 유지와 동일 의미)
-        self._merge_into_mem(xyz_now, rgb_now, now_step)
-
-        # 3) 주기적 프루닝(decay^age < c_min) – 기능 동일, 벡터화
+        # 4) 주기적 프루닝(decay^age < c_min)
         self._prune_mem(now_step)
 
-        # 4) export: lazy decay로 c 계산해 Nx7 반환 (기능 동일)
+        # 5) export
         out = self._export_array_from_mem(now_step)
         
-        # (선택) 시각화 로그: 과거일수록 페이드
         if self.verbose and out.shape[0] > 0:
             out_dbg = out.copy()
             rgb = out_dbg[:, 3:6].astype(np.float32, copy=False)
@@ -460,7 +696,6 @@ class PointCloudPreprocessor:
             print(f"time1: {t2 - t1}")
             print(f"time2: {t3 - t2}")
             print(f"time3: {mono_time.now_ms() - t3}")
-        
         
         self._frame_idx += 1
         return out
@@ -514,7 +749,10 @@ class PointCloudPreprocessor:
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
         _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
         return points[ind]
-        
+
+
+
+
     def _sample_points(self, points):
         """Apply farthest point sampling to reduce number of points."""
         if len(points) == 0:
@@ -567,7 +805,7 @@ class PointCloudPreprocessor:
         
         # Apply FPS
         sampled_points, indices = torch3d_ops.sample_farthest_points(
-            points=points_batch, K=[num_points])
+            points=points_batch, K=num_points)
             
         # Remove batch dimension
         sampled_points = sampled_points.squeeze(0)
