@@ -82,11 +82,7 @@ def main(input, output, match_episode, frequency, save_data):
     
     # EMA 가중치가 있으면 사용하고, 없으면 일반 모델 가중치를 사용
     state_dict = payload['state_dicts']['model']
-    if 'ema_model' in payload['state_dicts']:
-        state_dict = payload['state_dicts']['ema_model']
-        cprint("Loading EMA model weights for evaluation.", "green")
-    else:
-        cprint("Loading non-EMA model weights for evaluation.", "yellow")
+    
     policy.load_state_dict(state_dict)
     
     device = torch.device(cfg.training.device)
@@ -160,12 +156,13 @@ def main(input, output, match_episode, frequency, save_data):
             t_start = mono_time.now_s()
             iter_idx = 0
             is_evaluating = False
-            t2=0
+            cnt=0
 
             test_start = 0
 
             while True:
-                t_cycle_end = t_start + (iter_idx + 1) * dt
+                t_cycle_end = t_start + (iter_idx + 1) * dt * 1
+                t0 = mono_time.now_ms()
                 obs = env.get_obs()
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
@@ -203,66 +200,70 @@ def main(input, output, match_episode, frequency, save_data):
                             device=device)
                         
                         t1 = mono_time.now_ms()
-                        
-                        pred_action_10d = policy(cloud_data, batch_size=1).cpu()
-                        
-                        print(f"inference: {mono_time.now_ms() - t1}")
-                        print(f"loop time: {mono_time.now_ms() - t2}")
-                        t2 = mono_time.now_ms()
+                        if cnt%10 ==0:
+                            pred_action_10d = policy(cloud_data, batch_size=1).cpu()
 
-                        # 3. 액션 후처리
-                        pred = pred_action_10d
-                        if pred.ndim == 3:
-                            pred = pred.squeeze(0)
+                            print(f"inference: {mono_time.now_ms() - t1}")
+                            # print(f"loop time: {mono_time.now_ms() - t2}")
+                            t2 = mono_time.now_ms()
 
-                        pos   = pred[:, :3].cpu().numpy()
-                        rot6d = pred[:, 3:9].cpu().numpy()
-                        grip = (pred[:, 9:].cpu().numpy() >= 0.5).astype(np.int32)
-                        xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
+                            # 3. 액션 후처리
+                            pred = pred_action_10d
+                            if pred.ndim == 3:
+                                pred = pred.squeeze(0)
 
-                        # 6D 회전 표현을 오일러 각도로 변환
-                        xyz_euler_base_frame = xyz_rot_transform(
-                            xyz_rot6d,
-                            from_rep="rotation_6d",
-                            to_rep="euler_angles",
-                            to_convention="ZYX"
-                        )
-                        
-                        # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
-                        xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
-                        
-                        action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
-                        
-                        # 4. 로봇 제어
-                        obs_timestamps = obs['timestamp']          # mono_time 기반이어야 함
-                        L = len(action_sequence_7d)
-                        action_offset = 0
-                        action_exec_latency = 0.01  # 10ms
+                            pos   = pred[:, :3].cpu().numpy()
+                            rot6d = pred[:, 3:9].cpu().numpy()
+                            grip = np.where(pred[:, 9:].cpu().numpy() > 55, 85, 0).astype(np.int32) 
+                            xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
 
-                        action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
-                        is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
-                        
-                        if not np.any(is_new):
-                            # 모두 과거면: 다음 슬롯에 마지막 1스텝만 예약
-                            next_step_time = mono_time.now_s() + dt
-                            action_timestamps = np.array([next_step_time], dtype=np.float64)
-                            action_sequence_7d = action_sequence_7d[[-1]]
-                        else:
-                            action_timestamps = action_timestamps[is_new]
-                            action_sequence_7d = action_sequence_7d[is_new]
+                            # 6D 회전 표현을 오일러 각도로 변환
+                            xyz_euler_base_frame = xyz_rot_transform(
+                                xyz_rot6d,
+                                from_rep="rotation_6d",
+                                to_rep="euler_angles",
+                                to_convention="ZYX"
+                            )
 
-                        env.exec_actions(
-                            actions=action_sequence_7d,
-                            timestamps=action_timestamps
-                        )
+                            # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
+                            xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
+
+                            action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
+
+                            # 4. 로봇 제어
+                            obs_timestamps = obs['timestamp']          # mono_time 기반이어야 함
+                            L = len(action_sequence_7d)
+                            action_offset = 0
+                            action_exec_latency = 0.0 # 100ms
+
+                            action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
+                            is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
+
+
+                            if not np.any(is_new):
+                                # 모두 과거면: 다음 슬롯에 마지막 1스텝만 예약
+                                next_step_time = mono_time.now_s() + dt
+                                action_timestamps = np.array([next_step_time], dtype=np.float64)
+                                action_sequence_7d = action_sequence_7d[[-1]]
+                            else:
+                                action_timestamps = action_timestamps[is_new]
+                                action_sequence_7d = action_sequence_7d[is_new]
+
+
+
+                            env.exec_actions(
+                                actions=action_sequence_7d,
+                                timestamps=action_timestamps
+                            )
                         if mono_time.now_ms()- test_start > 60000:
                             env.end_episode()
                             is_evaluating=False
+                        cnt+=1
                 else:
                     # ===== 사람 제어 (Human Control) =====
                     target_pose = teleop.get_motion_state()
                     env.exec_actions(actions=[target_pose], timestamps=[mono_time.now_s() + dt])
-
+                print(f"loop time: {mono_time.now_ms() - t0}")
                 precise_wait(t_cycle_end)
                 iter_idx += 1
 

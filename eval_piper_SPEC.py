@@ -16,7 +16,9 @@ from pcdp.real_world.real_env_piper import RealEnv
 from pcdp.real_world.teleoperation_piper import TeleoperationPiper
 from pcdp.common.precise_sleep import precise_wait
 import pcdp.common.mono_time as mono_time
-from pcdp.real_world.keystroke_counter import KeystrokeCounter, Key, KeyCode
+from pcdp.real_world.keystroke_counter import (
+    KeystrokeCounter, Key, KeyCode
+)
 from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicyMono
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.model.common.normalizer import LinearNormalizer
@@ -51,49 +53,44 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
 @click.option('--output', '-o', required=True, help='Directory to save evaluation results.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
-def main(input, output, frequency):
-    # ckpt 로드
+@click.option('--save-data', is_flag=True, default=False, help="Enable saving episode data (pointcloud, robot state).")
+def main(input, output, match_episode, frequency, save_data):
+    # 체크포인트 및 설정 로드
     ckpt_path = input
     payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
 
-    # 정책 로드
+    # 정책 모델 초기화 및 가중치 로드
     policy: SPECPolicyMono = hydra.utils.instantiate(cfg.policy)
-    policy.load_state_dict(payload['state_dicts']['model'])
+    
+    state_dict = payload['state_dicts']['model']
+    policy.load_state_dict(state_dict)
+    
     device = torch.device(cfg.training.device)
     policy.to(device).eval()
     cprint(f"Policy loaded on {device}", "green")
 
-    # 정규화기 로드/빌드
-    ckpt_dir = os.path.dirname(ckpt_path)
-    n_path = os.path.join(ckpt_dir, "normalizer.pt")
-    
-    if os.path.exists(n_path):
-        # 1) ckpt에 저장된 normalizer를 최우선으로 사용
-        state = torch.load(n_path, map_location=device)
-        n = LinearNormalizer()
-        n.load_state_dict(state)
-        policy.set_normalizer(n)
-        cprint(f"[normalizer] loaded from ckpt: {n_path}", "green")
-    
-        # (선택) 모니터링: action_translation 통계 중심 출력
-        try:
-            pd = policy.normalizer['action_translation'].params_dict
-            center = (-pd['offset'] / pd['scale']).detach().cpu().numpy()
-            cprint(f"[normalizer] action_translation center (m): {center}", "cyan")
-        except Exception as e:
-            cprint(f"[normalizer] center print failed: {e}", "yellow")
-    
-    else:
-        # 2) 없으면 YAML 기반으로 dataset에서 fit
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        # 학습 YAML에 training.translation이 있으면 동일 범위를 강제
-        if 'translation' in cfg.training:
-            dataset.set_translation_norm_config(cfg.training.translation)
-    
-        n = dataset.get_normalizer(device=device)
-        policy.set_normalizer(n)
-        cprint("[normalizer] built from dataset (YAML).", "green")
+    # =========================
+    # Normalizer 설정 (재발 방지)
+    # 1) 체크포인트 폴더에 normalizer.pt가 있으면 로드
+    # 2) 없으면 학습 YAML의 translation 범위를 dataset에 강제 세팅 후 fit
+    # =========================
+    # ckpt_dir = os.path.dirname(ckpt_path)
+    # n_path = os.path.join(ckpt_dir, "normalizer.pt")
+    # if os.path.exists(n_path):
+    #     state = torch.load(n_path, map_location=device)
+    #     n = LinearNormalizer(); n.load_state_dict(state)
+    #     policy.set_normalizer(n)
+    #     cprint(f"Loaded normalizer: {n_path}", "green")
+    # else:
+    #     # ⬇️ 학습과 같은 translation 정규화 범위를 강제 (오프셋 방지)
+    #     cfg.task.dataset._target_ = 'pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset'
+    #     dataset = hydra.utils.instantiate(cfg.task.dataset)
+    #     if 'translation' in cfg.training:
+    #         dataset.set_translation_norm_config(cfg.training.translation)
+    #     normalizer = dataset.get_normalizer(device=device)
+    #     policy.set_normalizer(normalizer)
+    #     cprint("Built normalizer from dataset with training.translation enforced.", "green")
 
     # 주기 등
     dt = 1.0 / frequency
