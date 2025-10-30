@@ -692,6 +692,7 @@ class PointCloudPreprocessor:
             c   = np.clip(out[:, 6:7], 0.0, 1.0)
             s = 255.0 if (rgb.max() > 1.0 + 1e-6) else 1.0
             out_dbg[:, 3:6] = np.clip((rgb/s) * c, 0.0, 1.0) * s
+            print(f"c: {c}")
             print(f"time0: {t1 - t0}")
             print(f"time1: {t2 - t1}")
             print(f"time2: {t3 - t2}")

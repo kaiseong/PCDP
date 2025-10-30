@@ -42,8 +42,8 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 220
-  num_workers: 18
+  batch_size: 180
+  num_workers: 20
   shuffle: True
   # pin_memory: True
   # persistent_workers: True
@@ -70,10 +70,10 @@ training:
   debug: False
   resume: True
   lr_warmup_steps: 1000
-  num_epochs: 1000
-  use_ema: True
-  rollout_every: 5
-  save_epochs: 100
+  num_epochs: 120
+  use_ema: False
+  rollout_every: 1
+  save_epochs: 20
   tqdm_interval_sec: 1.0
   validation_every: 5
   # normalization
@@ -87,7 +87,7 @@ logging:
   id: null
   mode: online
   name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=on)"
-  project: Test_1
+  project: Test
   resume: true
   tags:
   - SPEC_mono_NSCL

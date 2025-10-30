@@ -2,7 +2,7 @@
 name: SPEC_stack
 
 # 368640
-pointcloud_shape: [92160, 6]  # max_points, XYZRGB
+pointcloud_shape: [92160, 7]  # max_points, XYZRGB
 dataset_path: data/please_please/recorder_data
 
 shape_meta: &shape_meta
@@ -14,9 +14,6 @@ shape_meta: &shape_meta
     robot_obs:
       shape: [7]  # 6DOF + gripper_width
       type: low_dim
-    # occlusion:
-    #   shape: [1]
-    #   type: low_dim
 
   action: 
     shape: [7]  # 6DOF + gripper_toggle
@@ -51,7 +48,7 @@ dataset:
     nb_points: 10
     sor_std: 1.7
     use_cuda: True
-    verbose: False
+    verbose: True
     enable_temporal: True
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}
@@ -64,10 +61,11 @@ dataset:
               [0.0, 252.65277099609375, 176.21173095703125],
               [0.0, 0.0, 1.0]]
     dist_depth: null
-    tau_prune_mm: 15.0
-    tau_same_mm: 5.0
     erode_k: 1
     z_unit: m
+    miss_prune_frames: 20
+    miss_min_age: 2 
+
 
     # Camera to robot transformation matrix (4x4). 
     extrinsics_matrix:
@@ -78,7 +76,7 @@ dataset:
     
     # Workspace bounds [x_min, x_max], [y_min, y_max], [z_min, z_max]
     workspace_bounds:
-      - [-0.000, 0.715]    # X range (meters)
+      - [-0.132, 0.715]    # X range (meters)
       - [-0.400, 0.350]   # Y range (meters)  
       - [-0.100, 0.600]    # Z range (meters)
     
