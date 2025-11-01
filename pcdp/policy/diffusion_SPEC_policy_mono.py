@@ -12,28 +12,6 @@ from pcdp.policy.RISE_transformer import Transformer
 import MinkowskiEngine as ME
 from pcdp.model.common.normalizer import LinearNormalizer
 
-class CrossAttn(nn.Module):
-    "now(Q), mem(KV) cross attn 1 block"
-    def __init__(self, d_model=512, nheads=8, dropout=0.1):
-        super().__init__()
-        self.ln_q = nn.LayerNorm(d_model)
-        self.ln_kv = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, nheads, dropout=dropout, batch_first=True)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, 4*d_model),
-            nn.GELU(),
-            nn.Linear(4*d_model, d_model),
-            nn.Dropout(dropout)
-        )
-        self.ln_out = nn.LayerNorm(d_model)
-
-    def forward(self, now, mem, pad_now=None, pad_mem=None):
-        attn_out, _ = self.attn(self.ln_q(now), self.ln_kv(mem), self.ln_kv(mem),
-                                key_padding_mask=pad_mem)
-        x = now + attn_out
-        x = x + self.ffn(self.ln_out(x))
-        return x
-
 
 class SPECPolicyMono(BasePointCloudPolicy):
     def __init__(
@@ -136,10 +114,7 @@ class SPECPolicyMono(BasePointCloudPolicy):
 
         
         global_cond = torch.cat([readout, robot_obs[:,0,:]], dim =-1)
-        # cond_in = torch.cat([readout_raw, robot_obs[:,0,:]], dim =-1)
-        # global_cond = self.cond_proj(cond_in)
-        
-        
+
         if actions is not None:
             # training mode
             loss = self.action_decoder.compute_loss(global_cond, actions)

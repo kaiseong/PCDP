@@ -1,0 +1,48 @@
+# train_diffusion_SPEC_EAG_workspace.yaml
+# -*- coding: utf-8 -*-
+# SPEC + EAG training config (standalone).
+# If you already use Hydra in your project, you can port these fields into your Hydra YAMLs.
+
+# =====================
+# Dataset (base)
+# =====================
+dataset:
+  _target_: pcdp.dataset.SPEC_stack_dataset.SPEC_RealStackPointCloudDataset
+  # Below are typical arguments; keep them aligned with your existing YAML.
+  dataset_path: data/please_please/recorder_data
+  voxel_size: 0.01
+  horizon: 20
+  # Any other args your dataset requires go here (shape_meta, pad_before, etc.)
+
+# =====================
+# EAG
+# =====================
+eag:
+  Hc: 2   # teacher tail length
+
+# =====================
+# Policy
+# =====================
+policy:
+  horizon: 20
+  action_dim: 10
+  hidden_dim: 512
+  encoder_max_num_token: 100
+  robot_obs_dim: 10
+  enable_eag: true
+  eag_tail_embed_dim: 128
+  eag_p_uncond: 0.25
+
+# =====================
+# Training
+# =====================
+training:
+  num_epochs: 50
+  batch_size: 8
+  num_workers: 8
+  lr: 3.0e-4
+  min_lr: 1.0e-5
+  weight_decay: 1.0e-4
+  warmup_steps: 1000
+  grad_clip_norm: 1.0
+  log_every: 50

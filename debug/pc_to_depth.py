@@ -3,7 +3,7 @@
 모델 추론으로 저장된 obs zarr데이터들
 '한 장면씩 넘겨보는' 디버깅 + (그리퍼 좌표계 + 좌/우 턱 ROI) 시각화
 + [추가] 매 프레임 포인트를 Base→Camera로 되돌려 Depth 이미지로 투영/시각화 (C2D 가정)
-+ [추가] 현재 전용 Depth / (현재 제외) 누적 Depth 두 창 동시 표시
++ [추가] 현재 전용 Depth / 누적 Depth / (현재 제외) 누적 Depth 세 창 동시 표시
 """
 
 import sys
@@ -18,6 +18,7 @@ sys.path.insert(0, project_root)
 import numpy as np
 import cv2
 import open3d as o3d
+import torch
 from pcdp.common.replay_buffer import ReplayBuffer
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 from pcdp.common import RISE_transformation as rise_tf
@@ -68,9 +69,9 @@ ROTATE_AROUND_GRIP_Z_DEG = 90.0
 
 ROI_CLOSE_AXIS    = 'x'
 ROI_APPROACH_AXIS = 'y'
-ROI_THICKNESS = 0.050
-ROI_DEPTH     = 0.030
-ROI_HEIGHT    = 0.050
+ROI_THICKNESS = 0.000
+ROI_DEPTH     = 0.000
+ROI_HEIGHT    = 0.000
 ROI_CENTER_OFFSET = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
 USE_WIDTH_FOR_GAP     = True
@@ -80,15 +81,16 @@ ROI_MIN_GAP           = 0.010
 ROI_MAX_GAP           = 0.150
 SMOOTH_GAP_ALPHA      = 0.0
 
-SHOW_ROI        = True
-SHOW_GRIP_AXIS  = True
-AXIS_SIZE_ROBOT = 0.10
+SHOW_ROI        = False
+SHOW_GRIP_AXIS  = False
+AXIS_SIZE_ROBOT = 0.001
 AXIS_SIZE_GRIP  = 0.06
 
-# ★ 변경: 단일 창 대신 2개 창을 띄운다
-SHOW_DEPTH_WIN  = True
-SHOW_DEPTH_CUR  = True
-SHOW_DEPTH_MEMO = True
+# ★ 변경: 단일 창 대신 3개 Depth 창을 띄운다 (총 4뷰: Open3D + 3 Depth)
+SHOW_DEPTH_WIN   = True
+SHOW_DEPTH_CUR   = True   # 현재 프레임만
+SHOW_DEPTH_FUSED = True   # 누적(fused, 현재 포함)
+SHOW_DEPTH_MEMO  = True   # 누적-현재 (현재 제외 메모리만)
 
 # ==================== 시각화 컨트롤 ====================
 class VisController:
@@ -106,7 +108,7 @@ class VisController:
 
     def step_backward(self, vis):
         if self.current_step > 0:
-            self.current_step -= 1
+            self.current_step -= 3
             self.vis_changed = True
             print(f"Frame: {self.current_step}/{self.total_steps - 1}")
         return False
@@ -193,7 +195,7 @@ def get_roi_centers_from_gap(gap, thickness, close_axis_idx, center_offset, anch
         cR[close_axis_idx] = +offs_centered
     return cL, cR
 
-# -------------------- (추가) 3D→Depth 래스터라이즈 --------------------
+# -------------------- 3D→Depth 래스터라이즈 --------------------
 def project_points_to_depth(points_cam_xyz, width, height, K, dist=None, assume_z_in_m=True):
     """
     points_cam_xyz: (N,3) 카메라 좌표계 (C2D 기준 Depth 카메라)
@@ -235,7 +237,7 @@ def project_points_to_depth(points_cam_xyz, width, height, K, dist=None, assume_
     depth.ravel()[uniq] = mins
     return depth
 
-def depth_to_color(depth_u16, colormap=cv2.COLORMAP_TURBO, p_lo=5, p_hi=95):
+def depth_to_color(depth_u16, colormap=cv2.COLORMAP_TURBO, p_lo=5, p_hi=95, text=None):
     h, w = depth_u16.shape
     depth = depth_u16.astype(np.float32)
     valid = depth > 0
@@ -248,9 +250,11 @@ def depth_to_color(depth_u16, colormap=cv2.COLORMAP_TURBO, p_lo=5, p_hi=95):
         d_clip = np.clip(depth, lo, hi)
         scaled[valid] = ((d_clip[valid] - lo) / (hi - lo + 1e-6) * 255.0).astype(np.uint8)
     color = cv2.applyColorMap(scaled, colormap)
+    if text:
+        cv2.putText(color, text, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
     return color
 
-# ★ 추가: voxel key 도우미 (fused와 current를 동일 voxel로 비교)
+# ★ voxel key 도우미 (fused와 current를 동일 voxel로 비교)
 def voxel_keys_from_xyz(xyz: np.ndarray, voxel_size: float):
     if xyz.size == 0:
         return np.empty((0,), dtype=np.dtype((np.void, 12)))
@@ -265,10 +269,10 @@ def interactive_visualize_with_gripper(obs_episode):
     + 같은 프레임의 Depth 이미지 (OpenCV)
     - pointcloud: Camera->Base (preprocess), then Base->Robot (Open3D), Base->Camera (OpenCV Depth)
     - ROI: Grip-local boxes; moves per frame with gripper & width
-    - [추가] Depth(Window 2개): (1) current-only, (2) fused-minus-current (mem-only)
+    - Depth(Window 3개): (1) current-only, (2) fused-all(현재 포함), (3) mem-only(fused-current)
     """
-    pts_seq  = obs_episode['pointcloud']          # (T, N, C) raw camera frame points (입력은 카메라 좌표계로 가정)
-    pose_seq = obs_episode['robot_eef_pose']      # [T,6], m/rad (Robot base 기준 플랜지)
+    pts_seq  = obs_episode['pointcloud']          # (T, N, C)
+    pose_seq = obs_episode['robot_eef_pose']      # [T,6], m/rad
     if 'robot_gripper' in obs_episode:
         grip_width  = obs_episode['robot_gripper'][:, 0]
         grip_effort = obs_episode['robot_gripper'][:, 1]
@@ -280,8 +284,7 @@ def interactive_visualize_with_gripper(obs_episode):
     if num_steps == 0:
         print("No data to visualize."); return
 
-    # ★ 변경: 두 개의 전처리 파이프라인
-    # 누적(fused) 파이프라인: temporal ON
+    # 누적(fused) 파이프라인: temporal ON (GPU 필요)
     preprocess_fused = PointCloudPreprocessor(
         extrinsics_matrix=camera_to_base,
         workspace_bounds=workspace_bounds,
@@ -292,13 +295,13 @@ def interactive_visualize_with_gripper(obs_episode):
         sor_std=1.7,
         enable_temporal=True,
         export_mode="fused",
-        use_cuda=True,
+        use_cuda=torch.cuda.is_available(),
         verbose=False,
         temporal_decay=0.95,
         depth_width=DEPTH_W, depth_height=DEPTH_H,
         K_depth=K_depth, dist_depth=DIST_DEPTH
     )
-    # 현재 프레임 전용(current) 파이프라인: temporal OFF
+    # 현재 프레임 전용(current): temporal OFF, occl_prune OFF (GPU 의존 제거)
     preprocess_cur = PointCloudPreprocessor(
         extrinsics_matrix=camera_to_base,
         workspace_bounds=workspace_bounds,
@@ -309,6 +312,8 @@ def interactive_visualize_with_gripper(obs_episode):
         sor_std=1.7,
         enable_temporal=False,
         export_mode="off",
+        enable_occlusion_prune=False,
+        use_cuda=False,
         verbose=False,
         depth_width=DEPTH_W, depth_height=DEPTH_H,
         K_depth=K_depth, dist_depth=DIST_DEPTH
@@ -353,38 +358,41 @@ def interactive_visualize_with_gripper(obs_episode):
     last_gap = None
     ANCHOR_MODE = "inner_face"
 
-    # ★ 변경: Depth 창 2개 생성
-    if SHOW_DEPTH_WIN and SHOW_DEPTH_CUR:
-        cv2.namedWindow("Depth (current-only)", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Depth (current-only)", 640, 576)
-    if SHOW_DEPTH_WIN and SHOW_DEPTH_MEMO:
-        cv2.namedWindow("Depth (mem-only fused-current)", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Depth (mem-only fused-current)", 640, 576)
+    # Depth 창 생성
+    if SHOW_DEPTH_WIN:
+        if SHOW_DEPTH_CUR:
+            cv2.namedWindow("Depth (Now PointCloud)", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Depth (Now PointCloud)", 640, 576)
+        if SHOW_DEPTH_FUSED:
+            cv2.namedWindow("Depth (Stack PointCloud)", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Depth (Stack PointCloud)", 640, 576)
+        if SHOW_DEPTH_MEMO:
+            cv2.namedWindow("Depth (Diff PointCloud)", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Depth (Diff PointCloud)", 640, 576)
 
     while is_running:
         if controller.vis_changed:
             step = controller.current_step
 
             # --- 현재 프레임 전용: Cam->Base (stateless) ----
-            pc_base_cur = preprocess_cur(pts_seq[step])   # (N,6)
+            pc_base_cur = preprocess_cur(pts_seq[step])   # (Nc,6) or zero
             # --- 누적(fused): Cam->Base ----
-            pc_base_fused = preprocess_fused(pts_seq[step])  # (M,7)
+            pc_base_fused = preprocess_fused(pts_seq[step])  # (Nf,7) or zero
 
-            # 3D Viewer는 누적(fused) 그대로 씀
-            if pc_base_fused.size == 0:
+            if pc_base_fused.size == 0 and pc_base_cur.size == 0:
                 controller.vis_changed = False
                 vis.poll_events(); vis.update_renderer(); time.sleep(0.01)
                 if SHOW_DEPTH_WIN: cv2.waitKey(1)
                 continue
 
-            # Open3D 표시용 (fused)
-            xyz_base_fused = pc_base_fused[:, :3].astype(np.float64)
-            rgb_fused = pc_base_fused[:, 3:6].astype(np.float64)
-            if rgb_fused.max() > 1.0: rgb_fused = rgb_fused/255.0
+            # Open3D 표시용 (fused 우선)
+            xyz_base_fused = pc_base_fused[:, :3].astype(np.float64) if pc_base_fused.size else np.zeros((0,3))
+            rgb_fused = pc_base_fused[:, 3:6].astype(np.float64) if pc_base_fused.size else np.zeros((0,3))
+            if rgb_fused.size and rgb_fused.max() > 1.0: rgb_fused = rgb_fused/255.0
 
             xyz_robot = transform_points(base_to_robot, xyz_base_fused)
             pcd.points = o3d.utility.Vector3dVector(xyz_robot)
-            pcd.colors = o3d.utility.Vector3dVector(rgb_fused)
+            pcd.colors = o3d.utility.Vector3dVector(rgb_fused if rgb_fused.size else np.zeros_like(xyz_robot))
 
             # --- 그리퍼 좌표계/ROI ----
             trans = pose_seq[step][:3]
@@ -394,7 +402,7 @@ def interactive_visualize_with_gripper(obs_episode):
             T_robot_grip_vis = T_robot_grip @ T_grip_local_offset @ T_grip_local_rotZ
 
             width_val  = float(grip_width[step])  if grip_width  is not None else np.nan
-            effort_val = float(grip_effort[step]) if grip_effort is not None else np.nan
+            # effort_val = float(grip_effort[step]) if grip_effort is not None else np.nan
             gap_t = width_to_gap(width_val, last_gap); last_gap = gap_t
 
             c_left_t, c_right_t = get_roi_centers_from_gap(
@@ -436,19 +444,30 @@ def interactive_visualize_with_gripper(obs_episode):
                     vis.update_geometry(roi_right)
                 T_prev_grip = T_robot_grip_vis.copy()
 
-            # --- ★ Depth 시각화: (1) current-only, (2) mem-only ----
+            # --- Depth 시각화 ---
             if SHOW_DEPTH_WIN:
-                # current-only
+                # 현재 프레임
                 if SHOW_DEPTH_CUR:
                     xyz_base_cur = pc_base_cur[:, :3].astype(np.float64) if pc_base_cur.size else np.zeros((0,3))
                     xyz_cam_cur = transform_points(base_to_camera, xyz_base_cur)
                     depth_cur = project_points_to_depth(
                         xyz_cam_cur, DEPTH_W, DEPTH_H, K_depth, dist=DIST_DEPTH, assume_z_in_m=True
                     )
-                    color_cur = depth_to_color(depth_cur, colormap=cv2.COLORMAP_TURBO, p_lo=5, p_hi=95)
-                    cv2.imshow("Depth (current-only)", color_cur)
+                    color_cur = depth_to_color(depth_cur, colormap=cv2.COLORMAP_TURBO,
+                                               p_lo=5, p_hi=95, text="")
+                    cv2.imshow("Depth (Now PointCloud)", color_cur)
 
-                # mem-only = fused - current (voxel key로 차집합)
+                # 누적(fused-all, 현재 포함)
+                if SHOW_DEPTH_FUSED:
+                    xyz_cam_fused = transform_points(base_to_camera, xyz_base_fused)
+                    depth_fused = project_points_to_depth(
+                        xyz_cam_fused, DEPTH_W, DEPTH_H, K_depth, dist=DIST_DEPTH, assume_z_in_m=True
+                    )
+                    color_fused = depth_to_color(depth_fused, colormap=cv2.COLORMAP_TURBO,
+                                                 p_lo=5, p_hi=95, text="")
+                    cv2.imshow("Depth (Stack PointCloud)", color_fused)
+
+                # 누적-현재 (메모리 전용 = fused - current, voxel 차집합)
                 if SHOW_DEPTH_MEMO:
                     xyz_base_fused_only = xyz_base_fused
                     if pc_base_cur.size:
@@ -467,19 +486,21 @@ def interactive_visualize_with_gripper(obs_episode):
                     depth_mem = project_points_to_depth(
                         xyz_cam_mem, DEPTH_W, DEPTH_H, K_depth, dist=DIST_DEPTH, assume_z_in_m=True
                     )
-                    color_mem = depth_to_color(depth_mem, colormap=cv2.COLORMAP_TURBO, p_lo=5, p_hi=95)
-                    cv2.imshow("Depth (mem-only fused-current)", color_mem)
+                    color_mem = depth_to_color(depth_mem, colormap=cv2.COLORMAP_TURBO,
+                                               p_lo=5, p_hi=95, text="")
+                    cv2.imshow("Depth (Diff PointCloud)", color_mem)
 
             # ROI occupancy 로그 (Grip-local) — fused 기준
-            Rg = T_robot_grip_vis[:3, :3]; tg = T_robot_grip_vis[:3, 3]
-            pts_local = (xyz_robot - tg) @ Rg.T
-            mask_L = points_in_roi_local(pts_local, c_left_t,  extent)
-            mask_R = points_in_roi_local(pts_local, c_right_t, extent)
-            N_L, N_R = int(mask_L.sum()), int(mask_R.sum())
-            S = min(N_L, N_R)
-            print(f"[{step}/{num_steps-1}]")
-            # print(f"[{step}/{num_steps-1}] width={width_val:.4f}m → gap={gap_t:.4f}m | N_L={N_L}, N_R={N_R}, S={S}")
-            # print(f"effort: {effort_val}")
+            if xyz_robot.shape[0] > 0:
+                Rg = T_robot_grip_vis[:3, :3]; tg = T_robot_grip_vis[:3, 3]
+                pts_local = (xyz_robot - tg) @ Rg.T
+                mask_L = points_in_roi_local(pts_local, c_left_t,  extent)
+                mask_R = points_in_roi_local(pts_local, c_right_t, extent)
+                N_L, N_R = int(mask_L.sum()), int(mask_R.sum())
+                S = min(N_L, N_R)
+                print(f"[{step}/{num_steps-1}] gap={gap_t:.4f}m | N_L={N_L}, N_R={N_R}, S(min)={S}")
+            else:
+                print(f"[{step}/{num_steps-1}] (no fused points)")
 
             controller.vis_changed = False
 
@@ -492,8 +513,9 @@ def interactive_visualize_with_gripper(obs_episode):
 
     vis.destroy_window()
     if SHOW_DEPTH_WIN:
-        if SHOW_DEPTH_CUR:  cv2.destroyWindow("Depth (current-only)")
-        if SHOW_DEPTH_MEMO: cv2.destroyWindow("Depth (mem-only fused-current)")
+        if SHOW_DEPTH_CUR:   cv2.destroyWindow("Depth (Now PointCloud)")
+        if SHOW_DEPTH_FUSED: cv2.destroyWindow("Depth (Stack PointCloud)")
+        if SHOW_DEPTH_MEMO:  cv2.destroyWindow("Depth (Diff PointCloud)")
 
 # ==================== I/O 래퍼 ====================
 class EpisodeAnalyzer:
