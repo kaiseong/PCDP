@@ -73,7 +73,8 @@ class SPEC_RealStackPointCloudDataset(BasePointCloudDataset):
                         shape_meta=shape_meta,
                         store=zarr.MemoryStore(),
                         pc_preprocessor=pc_preprocessor,
-                        lowdim_preprocessor=low_dim_preprocessor
+                        lowdim_preprocessor=low_dim_preprocessor,
+                        downsample_factor=4
                     )
                     print('Saving cache to disk.')
                     with zarr.ZipStore(cache_zarr_path) as zip_store:

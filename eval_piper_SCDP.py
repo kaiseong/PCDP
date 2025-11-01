@@ -1,4 +1,4 @@
-# eval_piper2.py
+# eval_piper_SPEC_CAT.py
 import time
 from multiprocessing.managers import SharedMemoryManager
 import click
@@ -19,7 +19,7 @@ import pcdp.common.mono_time as mono_time
 from pcdp.real_world.keystroke_counter import (
     KeystrokeCounter, Key, KeyCode
 )
-from pcdp.policy.diffusion_SCDP_policy import SCDPPolicy
+from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicyMono
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
@@ -76,15 +76,9 @@ def main(input, output, match_episode, frequency):
     cfg = payload['cfg']
 
     # 정책 모델 초기화 및 가중치 로드
-    policy: PCDPPolicy = hydra.utils.instantiate(cfg.policy)
+    policy: SPECPolicyMono = hydra.utils.instantiate(cfg.policy)
     
-    # EMA 가중치가 있으면 사용하고, 없으면 일반 모델 가중치를 사용
     state_dict = payload['state_dicts']['model']
-    if 'ema_model' in payload['state_dicts']:
-        state_dict = payload['state_dicts']['ema_model']
-        cprint("Loading EMA model weights for evaluation.", "green")
-    else:
-        cprint("Loading non-EMA model weights for evaluation.", "yellow")
     policy.load_state_dict(state_dict)
     
     device = torch.device(cfg.training.device)
@@ -105,7 +99,7 @@ def main(input, output, match_episode, frequency):
         cprint(f"Loaded normalizer: {n_path}", "green")
     else:
         # ⬇️ 학습과 같은 translation 정규화 범위를 강제 (오프셋 방지)
-        cfg.task.dataset._target_ = 'pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset'
+        cfg.task.dataset._target_ = 'pcdp.dataset.SPEC_stack_dataset.SPEC_RealStackPointCloudDataset'
         dataset = hydra.utils.instantiate(cfg.task.dataset)
         if 'translation' in cfg.training:
             dataset.set_translation_norm_config(cfg.training.translation)
@@ -163,7 +157,7 @@ def main(input, output, match_episode, frequency):
             test_start = 0
 
             while True:
-                t_cycle_end = t_start + (iter_idx + 1) * 1
+                t_cycle_end = t_start + (iter_idx + 1) * dt 
                 obs = env.get_obs()
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
@@ -176,11 +170,13 @@ def main(input, output, match_episode, frequency):
                         if not is_evaluating:
                             env.start_episode()
                             is_evaluating = True
+                            pc_preprocessor.reset_temporal()
                             test_start = mono_time.now_ms()
                             cprint("Evaluation started!", "cyan")
                     elif key_stroke == KeyCode(char='s'):
                         if is_evaluating:
                             env.end_episode()
+                            pc_preprocessor.reset_temporal()
                             is_evaluating = False
                             cprint("Evaluation stopped. Human in control.", "yellow")
 
@@ -204,7 +200,8 @@ def main(input, output, match_episode, frequency):
 
                         # 포인트클라우드 전처리
                         pc = pc_preprocessor.process(pc_raw)
-                        coords = np.ascontiguousarray(pc[:, :3] / voxel_size, dtype=np.int32)
+                        coords = np.floor(pc[:, :3] / voxel_size).astype(np.int32)
+                        coords = np.ascontiguousarray(coords)
                         feats = pc.astype(np.float32)
                         coords_batch, feats_batch = ME.utils.sparse_collate([coords], [feats])
                         cloud_data = ME.SparseTensor(
@@ -227,7 +224,7 @@ def main(input, output, match_episode, frequency):
 
                         pos   = pred[:, :3].cpu().numpy()
                         rot6d = pred[:, 3:9].cpu().numpy()
-                        grip = (pred[:, 9:].cpu().numpy() >= 0.5).astype(np.int32)
+                        grip = pred[:, 9:].cpu().numpy()
                         xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
 
                         # 6D 회전 표현을 오일러 각도로 변환

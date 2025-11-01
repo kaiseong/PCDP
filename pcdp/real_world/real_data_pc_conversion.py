@@ -951,7 +951,6 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     """
 
     episode_path = pathlib.Path(episode_path)
-
     if pc_preprocessor is not None and hasattr(pc_preprocessor, "reset_temporal"):
         pc_preprocessor.reset_temporal()
     
@@ -1151,7 +1150,7 @@ def _get_replay_buffer(
     print(f"  - Pointcloud keys: {pointcloud_keys}")
     print(f"  - Lowdim keys: {lowdim_keys}")
     print(f"  - Action shape: {shape_meta.get('action', {}).get('shape', 'undefined')}")
-    
+    print(f"  - downsample_factor: {downsample_factor}")
     # Find all episode directories
     episode_dirs = []
     for item in sorted(dataset_path.iterdir()):

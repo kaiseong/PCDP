@@ -101,14 +101,14 @@ class VisController:
 
     def step_forward(self, vis):
         if self.current_step < self.total_steps - 1:
-            self.current_step += 3
+            self.current_step += 1
             self.vis_changed = True
             print(f"Frame: {self.current_step}/{self.total_steps - 1}")
         return False
 
     def step_backward(self, vis):
         if self.current_step > 0:
-            self.current_step -= 3
+            self.current_step -= 1
             self.vis_changed = True
             print(f"Frame: {self.current_step}/{self.total_steps - 1}")
         return False
@@ -296,7 +296,7 @@ def interactive_visualize_with_gripper(obs_episode):
         enable_temporal=True,
         export_mode="fused",
         use_cuda=torch.cuda.is_available(),
-        verbose=False,
+        verbose=True,
         temporal_decay=0.95,
         depth_width=DEPTH_W, depth_height=DEPTH_H,
         K_depth=K_depth, dist_depth=DIST_DEPTH
@@ -550,8 +550,8 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
 if __name__ == "__main__":
     # --- USER CONFIGURATION ---
-    BASE_DATA_DIR = "/home/nscl/diffusion_policy/data/please_please/recorder_data"
-    EPISODE_TO_LOAD = "episode_0163"
+    BASE_DATA_DIR = "/home/moai/pcdp/data/material/recorder_data"
+    EPISODE_TO_LOAD = "episode_0001"
     # --------------------------
     try:
         analyzer = EpisodeAnalyzer(BASE_DATA_DIR)

@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 import MinkowskiEngine as ME
 from termcolor import cprint
 
+import multiprocessing as mp
 from pcdp.real_world.real_env_piper import RealEnv
 from pcdp.real_world.teleoperation_piper import TeleoperationPiper
 from pcdp.common.precise_sleep import precise_wait
@@ -22,7 +23,9 @@ from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicyMono
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
 from pcdp.model.common.normalizer import LinearNormalizer
-from SPEC_Processor import SPECProcessor, SpecProcConfig
+from SPEC_Processor import SPECProcessor, SpecProcConfig, SPECProcessorThread
+
+
 
 robot_to_base = np.array([
     [1.,         0.,         0.,          -0.04],
@@ -71,7 +74,8 @@ def revert_action_transformation(transformed_action_6d, robot_to_base_matrix):
 def main(input, output, match_episode, frequency, save_data):
     # 체크포인트 및 설정 로드
     ckpt_path = input
-    payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
+    payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill, map_location='cpu')
+    # payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
 
     # 정책 모델 초기화 및 가중치 로드
@@ -83,6 +87,8 @@ def main(input, output, match_episode, frequency, save_data):
     device = torch.device(cfg.training.device)
     policy.to(device).eval()
     cprint(f"Policy loaded on {device}", "green")
+
+    
 
     normalizer_loaded = False
     # 1) ckpt payload 내부 탐색
@@ -142,19 +148,42 @@ def main(input, output, match_episode, frequency, save_data):
             
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")
             
-            spec_proc = SPECProcessor(
-                shm_manager=shm_manager,
-                env=env,
-                cfg=SpecProcConfig(
-                    voxel_size=voxel_size,
-                    max_points=90000,         # SPEC_Processor.py와 동일하게
-                    feats_dim=7               # [x,y,z,r,g,b,c]
+            pc_cfg  = OmegaConf.to_container(cfg.task.dataset.pc_preprocessor_config,  resolve=True)
+            ld_cfg  = OmegaConf.to_container(cfg.task.dataset.low_dim_preprocessor_config, resolve=True)
+            max_pts = cfg.task.pointcloud_shape[0]
+
+            warmup_t0 = mono_time.now_s()
+            while True:
+                try:
+                    _ = env.get_obs()   # 내부적으로 n_obs_steps개 last_k를 가져옴
+                    break               # 성공하면 바로 탈출
+                except AssertionError:
+                    # 아직 k > count 상태. 잠깐 기다렸다 재시도
+                    time.sleep(0.01)
+                    # 너무 오래 걸리면 경고만 찍고 계속 기다림(하드웨어/조명 등 초기화 지연 대비)
+                    if mono_time.now_s() - warmup_t0 > 2.0:
+                        cprint("[warn] Sensor warm-up is taking longer than usual...", "yellow")
+                        warmup_t0 = mono_time.now_s()
+
+            spec_proc = SPECProcessorThread(
+            shm_manager=shm_manager,
+            env=env,
+            cfg=SpecProcConfig(
+                max_points=max_pts,
+                feats_dim=7,
+                pc_preproc_cfg=pc_cfg,
+                lowdim_preproc_cfg=ld_cfg,
+                rb_put_fps=int(frequency),
+                rb_get_time_budget=0.033,
                 ),
-                put_fps=frequency            # 10Hz
             )
+
             spec_proc.start()
             proc_rb = spec_proc.get_ringbuffer()
             latest_step = -1
+
+            policy.to(device).eval()
+            cprint(f"Policy loaded on {device}", "green")
 
             target_pose = [0.054952, 0.0, 0.493991, 0.0, np.deg2rad(85.0), 0.0, 0.0]
             plan_time = mono_time.now_s() + 2.0
@@ -202,7 +231,7 @@ def main(input, output, match_episode, frequency, save_data):
                         if pkt is None:
                             continue
                         n = int(pkt['n_points'][0])
-                        assert 0 <= n <= 90000
+                        assert 0 <= n <= max_pts  # cfg.task.pointcloud_shape[0]
                         if n <= 0:
                             continue
 
@@ -226,14 +255,14 @@ def main(input, output, match_episode, frequency, save_data):
                         feats  = pc7.astype(np.float32)
                         
                         coords_batch, feats_batch = ME.utils.sparse_collate([coords], [feats])
-                        cloud_data = ME.SparseTensor(
-                            features=feats_batch, 
-                            coordinates=coords_batch,
-                            device=device)
+                        coords_batch = coords_batch.to(device, non_blocking=True)
+                        feats_batch  = feats_batch.to(device,  non_blocking=True)
+                        cloud_data = ME.SparseTensor(features=feats_batch, coordinates=coords_batch)
+                        
                         t1 = mono_time.now_ms()
                         
                         # 2. 액션 추론 (Policy가 Normalizer 상태까지 포함)
-                        pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1).cpu()
+                        pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1)
                         
                         print(f"inference: {mono_time.now_ms() - t1}")
                         print(f"loop time: {mono_time.now_ms() - t2}")
@@ -246,7 +275,7 @@ def main(input, output, match_episode, frequency, save_data):
 
                         pos   = pred[:, :3].cpu().numpy()
                         rot6d = pred[:, 3:9].cpu().numpy()
-                        grip = (pred[:, 9:].cpu().numpy() >= 0.5).astype(np.int32)
+                        grip = pred[:, 9:].cpu().numpy()
                         xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
 
                         # 6D 회전 표현을 오일러 각도로 변환
@@ -259,7 +288,8 @@ def main(input, output, match_episode, frequency, save_data):
                         
                         # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
                         xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
-                        
+                        cprint(f"C={cloud_data.C.device}, F={cloud_data.F.device}", "cyan")   # 둘 다 cuda:0 이어야 정답
+                        cprint(f"robot_obs={robot_obs_tensor.device}", "cyan")                # cuda:0
                         action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
                         
                         # 4. 로봇 제어

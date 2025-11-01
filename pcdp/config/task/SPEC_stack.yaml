@@ -48,7 +48,7 @@ dataset:
     nb_points: 10
     sor_std: 1.7
     use_cuda: True
-    verbose: True
+    verbose: False
     enable_temporal: True
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}

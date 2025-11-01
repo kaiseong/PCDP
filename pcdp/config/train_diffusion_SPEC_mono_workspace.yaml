@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
 # horizon: 4
-horizon: 16
+horizon: 20
 n_obs_steps: 1
 # n_action_steps: 3
 n_action_steps: 8
@@ -43,7 +43,7 @@ ema:
 
 dataloader:
   batch_size: 180
-  num_workers: 20
+  num_workers: 15
   shuffle: True
   # pin_memory: True
   # persistent_workers: True
@@ -90,7 +90,7 @@ logging:
   project: Test
   resume: true
   tags:
-  - SPEC_mono_NSCL
+  - SPEC_mono_MoAI
 
 checkpoint:
   save_ckpt: True
