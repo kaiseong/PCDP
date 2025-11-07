@@ -37,8 +37,8 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 180
-  num_workers: 20
+  batch_size: 160
+  num_workers: 15
   shuffle: True
   drop_last: True
 
@@ -61,10 +61,10 @@ training:
   debug: False
   resume: True
   lr_warmup_steps: 1000
-  num_epochs: 120
+  num_epochs: 60
   use_ema: False
   rollout_every: 1
-  save_epochs: 10
+  save_epochs: 15
   tqdm_interval_sec: 1.0
   validation_every: 5
   # normalize
@@ -78,20 +78,23 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "RISE_${now:%Y.%m.%d}-(Filter=ON)"
+  name: "RISE_${now:%Y.%m.%d}-(Filter=OFF)"
   project: Test_3
   resume: true
   tags:
-  - RISE_NSCL
+  - RISE_MoAI
+
 
 checkpoint:
   save_ckpt: True
   save_last_ckpt: True
   save_last_snapshot: False
 
+
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
 
 hydra:
   job:

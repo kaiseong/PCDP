@@ -42,13 +42,12 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 180
+  batch_size: 160
   num_workers: 15
   shuffle: True
   # pin_memory: True
   # persistent_workers: True
   drop_last: True
-
 
 val_dataloader:
   batch_size: 128
@@ -70,10 +69,10 @@ training:
   debug: False
   resume: True
   lr_warmup_steps: 1000
-  num_epochs: 120
+  num_epochs: 60
   use_ema: False
   rollout_every: 1
-  save_epochs: 20
+  save_epochs: 15
   tqdm_interval_sec: 1.0
   validation_every: 5
   # normalization
@@ -86,8 +85,8 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=on)"
-  project: Test
+  name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=on, Downsample=4)"
+  project: Test_3
   resume: true
   tags:
   - SPEC_mono_MoAI

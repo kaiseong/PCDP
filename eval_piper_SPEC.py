@@ -22,8 +22,8 @@ from pcdp.real_world.keystroke_counter import (
 from pcdp.policy.diffusion_SPEC_policy_mono import SPECPolicyMono
 from pcdp.common.RISE_transformation import xyz_rot_transform
 from pcdp.dataset.RISE_util import *
+from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor, LowDimPreprocessor
 from pcdp.model.common.normalizer import LinearNormalizer
-from SPEC_Processor import SPECProcessor, SpecProcConfig, SPECProcessorThread
 
 
 
@@ -90,37 +90,37 @@ def main(input, output, match_episode, frequency, save_data):
 
     
 
-    normalizer_loaded = False
-    # 1) ckpt payload 내부 탐색
-    normalizer_state = None
-    try:
-        cand_roots = [payload.get('state_dicts', {}), payload]
-        cand_keys  = ['normalizer', 'normalizer_state', 'normalizer_state_dict']
-        for root in cand_roots:
-            for k in cand_keys:
-                if k in root:
-                    normalizer_state = root[k]
-                    break
-            if normalizer_state is not None:
-                break
-        if normalizer_state is not None:
-            n = LinearNormalizer(); n.load_state_dict(normalizer_state)
-            policy.set_normalizer(n)
-            normalizer_loaded = True
-            cprint("[eval] Loaded normalizer from checkpoint payload.", "green")
-    except Exception as e:
-        cprint(f"[warn] Failed to load normalizer from payload: {e}", "yellow")
+    # normalizer_loaded = False
+    # # 1) ckpt payload 내부 탐색
+    # normalizer_state = None
+    # try:
+    #     cand_roots = [payload.get('state_dicts', {}), payload]
+    #     cand_keys  = ['normalizer', 'normalizer_state', 'normalizer_state_dict']
+    #     for root in cand_roots:
+    #         for k in cand_keys:
+    #             if k in root:
+    #                 normalizer_state = root[k]
+    #                 break
+    #         if normalizer_state is not None:
+    #             break
+    #     if normalizer_state is not None:
+    #         n = LinearNormalizer(); n.load_state_dict(normalizer_state)
+    #         policy.set_normalizer(n)
+    #         normalizer_loaded = True
+    #         cprint("[eval] Loaded normalizer from checkpoint payload.", "green")
+    # except Exception as e:
+    #     cprint(f"[warn] Failed to load normalizer from payload: {e}", "yellow")
         
-    # 2) YAML/dataset
-    if not normalizer_loaded:
-        cprint("[eval] No normalizer in ckpt payload; rebuilding from dataset.", "yellow")
-        cfg.task.dataset._target_ = 'pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset'
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        if 'translation' in cfg.training:
-            dataset.set_translation_norm_config(cfg.training.translation)
-        normalizer = dataset.get_normalizer(device=device)
-        policy.set_normalizer(normalizer)
-        cprint("[eval] Built normalizer from dataset with training.translation.", "green")
+    # # 2) YAML/dataset
+    # if not normalizer_loaded:
+    #     cprint("[eval] No normalizer in ckpt payload; rebuilding from dataset.", "yellow")
+    #     cfg.task.dataset._target_ = 'pcdp.dataset.PCDP_stack_dataset.PCDP_RealStackPointCloudDataset'
+    #     dataset = hydra.utils.instantiate(cfg.task.dataset)
+    #     if 'translation' in cfg.training:
+    #         dataset.set_translation_norm_config(cfg.training.translation)
+    #     normalizer = dataset.get_normalizer(device=device)
+    #     policy.set_normalizer(normalizer)
+    #     cprint("[eval] Built normalizer from dataset with training.translation.", "green")
 
 
     dt = 1.0 / frequency
@@ -148,9 +148,8 @@ def main(input, output, match_episode, frequency, save_data):
             
             cprint('Ready! Press "C" to start evaluation, "S" to stop, "Q" to quit.', "yellow")
             
-            pc_cfg  = OmegaConf.to_container(cfg.task.dataset.pc_preprocessor_config,  resolve=True)
-            ld_cfg  = OmegaConf.to_container(cfg.task.dataset.low_dim_preprocessor_config, resolve=True)
-            max_pts = cfg.task.pointcloud_shape[0]
+            pc_preprocessor = PointCloudPreprocessor(**cfg.task.dataset.pc_preprocessor_config)
+            low_preprocessor = LowDimPreprocessor(**cfg.task.dataset.low_dim_preprocessor_config)
 
             warmup_t0 = mono_time.now_s()
             while True:
@@ -165,21 +164,6 @@ def main(input, output, match_episode, frequency, save_data):
                         cprint("[warn] Sensor warm-up is taking longer than usual...", "yellow")
                         warmup_t0 = mono_time.now_s()
 
-            spec_proc = SPECProcessorThread(
-            shm_manager=shm_manager,
-            env=env,
-            cfg=SpecProcConfig(
-                max_points=max_pts,
-                feats_dim=7,
-                pc_preproc_cfg=pc_cfg,
-                lowdim_preproc_cfg=ld_cfg,
-                rb_put_fps=int(frequency),
-                rb_get_time_budget=0.033,
-                ),
-            )
-
-            spec_proc.start()
-            proc_rb = spec_proc.get_ringbuffer()
             latest_step = -1
 
             policy.to(device).eval()
@@ -196,9 +180,10 @@ def main(input, output, match_episode, frequency, save_data):
             t2=0
 
             test_start = 0
-
+            cnt=0
             while True:
-                t_cycle_end = t_start + (iter_idx + 1) * dt
+                t_cycle_end = t_start + (iter_idx + 1) * 0.1
+                obs = env.get_obs()
 
                 # 키보드 입력 처리
                 press_events = key_counter.get_press_events()
@@ -206,53 +191,44 @@ def main(input, output, match_episode, frequency, save_data):
                     if key_stroke == KeyCode(char='q'):
                         if is_evaluating:
                             env.end_episode()
-                        try:
-                            spec_proc.stop()
-                            spec_proc.join(timeout=1.0)
-                        except Exception:
-                            pass
                         return
                     elif key_stroke == KeyCode(char='c'):
                         if not is_evaluating:
                             env.start_episode()
                             is_evaluating = True
+                            pc_preprocessor.reset_temporal()
                             test_start = mono_time.now_ms()
                             cprint("Evaluation started!", "cyan")
                     elif key_stroke == KeyCode(char='s'):
                         if is_evaluating:
                             env.end_episode()
+                            pc_preprocessor.reset_temporal()
                             is_evaluating = False
                             cprint("Evaluation stopped. Human in control.", "yellow")
 
                 if is_evaluating:
                     with torch.no_grad():
+                        # 1. 관측 데이터 전처리 (학습 파이프라인과 일치시킴)
+                        pc_raw = obs['main_pointcloud'][-1]
+                        pose_raw = obs['robot_eef_pose'][-1].astype(np.float64)
+                        grip_raw = obs['robot_gripper'][-1].flatten().astype(np.float64)
+                        robot_obs_raw_7d = np.concatenate([pose_raw, grip_raw[:1]])
+                        # 로봇 관측값 좌표계 변환 (학습 데이터와 동일하게)
+                        transformed_obs_7d = low_preprocessor.TF_process(robot_obs_raw_7d[np.newaxis, :]).squeeze(0)
+                        
+                        # Policy 입력을 위해 10D 텐서로 변환
+                        obs_pose_euler = transformed_obs_7d[:6]
+                        obs_gripper = transformed_obs_7d[6:]
+                        obs_9d = xyz_rot_transform(obs_pose_euler, from_rep='euler_angles', to_rep='rotation_6d', from_convention='ZYX')
+                        obs_10d = np.concatenate([obs_9d, obs_gripper], axis=-1)
+                        robot_obs_tensor = torch.from_numpy(obs_10d).to(device).float().unsqueeze(0)
+                        # shape is [1, 10]
 
-                        pkt = proc_rb.get_last_k(1)
-                        if pkt is None:
-                            continue
-                        n = int(pkt['n_points'][0])
-                        assert 0 <= n <= max_pts  # cfg.task.pointcloud_shape[0]
-                        if n <= 0:
-                            continue
-
-                        step_id = int(pkt['step_idx'][0])
-                        if step_id <= latest_step:
-                            continue
-                        latest_step = step_id
-
-                        ts_obs = float(pkt['timestamp'][0])
-                        # 너무 낡은 관측이면 드롭 (2 프레임 이상 지연 방지)
-                        if mono_time.now_s() - ts_obs > 2*dt:
-                            continue
-
-                        pc7 = pkt['pc7'][0][:n]    # (n,7) [x,y,z,r,g,b,c]
-                        robot10 = pkt['robot10'][0].astype(np.float32) # (10,)
-                        robot_obs_tensor = torch.from_numpy(robot10).to(device).float().unsqueeze(0)
-
-                        # 2) eval에서 양자화 → SparseTensor (학습과 동일 규약)
-                        coords = np.floor(pc7[:, :3] / voxel_size).astype(np.int32)
+                        # 포인트클라우드 전처리
+                        pc = pc_preprocessor.process(pc_raw)
+                        coords = np.floor(pc[:, :3] / voxel_size).astype(np.int32)
                         coords = np.ascontiguousarray(coords)
-                        feats  = pc7.astype(np.float32)
+                        feats = pc.astype(np.float32)
                         
                         coords_batch, feats_batch = ME.utils.sparse_collate([coords], [feats])
                         coords_batch = coords_batch.to(device, non_blocking=True)
@@ -262,58 +238,58 @@ def main(input, output, match_episode, frequency, save_data):
                         t1 = mono_time.now_ms()
                         
                         # 2. 액션 추론 (Policy가 Normalizer 상태까지 포함)
-                        pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1)
-                        
-                        print(f"inference: {mono_time.now_ms() - t1}")
-                        print(f"loop time: {mono_time.now_ms() - t2}")
-                        t2 = mono_time.now_ms()
-
-                        # 3. 액션 후처리
-                        pred = pred_action_10d
-                        if pred.ndim == 3:
-                            pred = pred.squeeze(0)
-
-                        pos   = pred[:, :3].cpu().numpy()
-                        rot6d = pred[:, 3:9].cpu().numpy()
-                        grip = pred[:, 9:].cpu().numpy()
-                        xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
-
-                        # 6D 회전 표현을 오일러 각도로 변환
-                        xyz_euler_base_frame = xyz_rot_transform(
-                            xyz_rot6d,
-                            from_rep="rotation_6d",
-                            to_rep="euler_angles",
-                            to_convention="ZYX"
-                        )
-                        
-                        # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
-                        xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
-                        cprint(f"C={cloud_data.C.device}, F={cloud_data.F.device}", "cyan")   # 둘 다 cuda:0 이어야 정답
-                        cprint(f"robot_obs={robot_obs_tensor.device}", "cyan")                # cuda:0
-                        action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
-                        
-                        # 4. 로봇 제어
-                        obs_timestamps = np.array([ts_obs], dtype = np.float64)
-                        L = len(action_sequence_7d)
-                        action_offset = 0
-                        action_exec_latency = 0.01  # 10ms
-
-                        action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
-                        is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
-                        
-                        if not np.any(is_new):
-                            # 모두 과거면: 다음 슬롯에 마지막 1스텝만 예약
-                            next_step_time = mono_time.now_s() + dt
-                            action_timestamps = np.array([next_step_time], dtype=np.float64)
-                            action_sequence_7d = action_sequence_7d[[-1]]
-                        else:
-                            action_timestamps = action_timestamps[is_new]
-                            action_sequence_7d = action_sequence_7d[is_new]
-
-                        env.exec_actions(
-                            actions=action_sequence_7d,
-                            timestamps=action_timestamps
-                        )
+                        if cnt%10==0:
+                            pred_action_10d = policy(cloud_data, robot_obs=robot_obs_tensor, batch_size=1)
+                            
+                            print(f"inference: {mono_time.now_ms() - t1}")
+                            print(f"loop time: {mono_time.now_ms() - t2}")
+                            t2 = mono_time.now_ms()
+    
+                            # 3. 액션 후처리
+                            pred = pred_action_10d
+                            if pred.ndim == 3:
+                                pred = pred.squeeze(0)
+    
+                            pos   = pred[:, :3].cpu().numpy()
+                            rot6d = pred[:, 3:9].cpu().numpy()
+                            grip = pred[:, 9:].cpu().numpy()
+                            xyz_rot6d = np.concatenate([pos, rot6d], axis=-1)
+    
+                            # 6D 회전 표현을 오일러 각도로 변환
+                            xyz_euler_base_frame = xyz_rot_transform(
+                                xyz_rot6d,
+                                from_rep="rotation_6d",
+                                to_rep="euler_angles",
+                                to_convention="ZYX"
+                            )
+                            
+                            # 액션을 "base" 좌표계에서 로봇의 실제 실행 좌표계로 역변환
+                            xyz_euler_robot_frame = revert_action_transformation(xyz_euler_base_frame, robot_to_base)
+                            cprint(f"robot_obs={robot_obs_tensor.device}", "cyan")                # cuda:0
+                            action_sequence_7d = np.concatenate([xyz_euler_robot_frame, grip], axis=-1)
+                            
+                            # 4. 로봇 제어
+                            obs_timestamps = obs['timestamp']  
+                            L = len(action_sequence_7d)
+                            action_offset = 0
+                            action_exec_latency = 0.01  # 10ms
+    
+                            action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
+                            is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
+                            
+                            if not np.any(is_new):
+                                # 모두 과거면: 다음 슬롯에 마지막 1스텝만 예약
+                                next_step_time = mono_time.now_s() + dt
+                                action_timestamps = np.array([next_step_time], dtype=np.float64)
+                                action_sequence_7d = action_sequence_7d[[-1]]
+                            else:
+                                action_timestamps = action_timestamps[is_new]
+                                action_sequence_7d = action_sequence_7d[is_new]
+    
+                            env.exec_actions(
+                                actions=action_sequence_7d,
+                                timestamps=action_timestamps
+                            )
                         if mono_time.now_ms()- test_start > 60000:
                             env.end_episode()
                             is_evaluating=False
@@ -323,6 +299,7 @@ def main(input, output, match_episode, frequency, save_data):
                     env.exec_actions(actions=[target_pose], timestamps=[mono_time.now_s() + dt])
 
                 precise_wait(t_cycle_end)
+                cnt+=1
                 iter_idx += 1
 
 

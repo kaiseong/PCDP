@@ -15,7 +15,7 @@ import torchvision.transforms as T
 import collections.abc as container_abcs
 import torch.nn as nn
 from tqdm import tqdm
-
+from omegaconf import OmegaConf, DictConfig, ListConfig
 from pcdp.dataset.base_dataset import BasePointCloudDataset
 from pcdp.model.common.normalizer import LinearNormalizer
 from pcdp.common.replay_buffer import ReplayBuffer
@@ -29,6 +29,12 @@ from pcdp.common.normalize_util import get_norm_stats_in_batch
 from pcdp.dataset.RISE_util import *
 from pcdp.common.RISE_transformation import xyz_rot_transform
 
+
+def _to_py(x):
+    # DictConfig/ListConfig → 순수 파이썬 컨테이너
+    if isinstance(x, (DictConfig, ListConfig)):
+        return OmegaConf.to_container(x, resolve=True)
+    return x
 class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
     def __init__(self,
             shape_meta: dict,
@@ -47,6 +53,9 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             pc_preprocessor_config=None,
             enable_low_dim_preprocessing=True,
             low_dim_preprocessor_config=None,
+            downsample_factor=3,
+            downsample_use_all_offsets: bool = False,
+            group_by_offsets = None,
             # RISE specific params
             aug=False,
             aug_trans_min=None,
@@ -65,19 +74,37 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
 
         pc_preprocessor = None
         if enable_pc_preprocessing:
-            pc_preprocessor = PointCloudPreprocessor(**(pc_preprocessor_config or {}))
+            pc_kwargs = OmegaConf.to_container(pc_preprocessor_config, resolve=True) if pc_preprocessor_config else {}
+            pc_preprocessor = PointCloudPreprocessor(**pc_kwargs)
         
         low_dim_preprocessor = None
         if enable_low_dim_preprocessing:
-            low_dim_preprocessor = LowDimPreprocessor(**(low_dim_preprocessor_config or {}))
+            ld_kwargs = OmegaConf.to_container(low_dim_preprocessor_config, resolve=True) if low_dim_preprocessor_config else {}
+            low_dim_preprocessor = LowDimPreprocessor(**ld_kwargs)
         
 
 
         replay_buffer = None
         if use_cache:
-            shape_meta_json = json.dumps(OmegaConf.to_container(shape_meta), sort_keys=True)
-            shape_meta_hash = hashlib.md5(shape_meta_json.encode('utf-8')).hexdigest()
-            cache_zarr_path = os.path.join(dataset_path, shape_meta_hash + '.zarr.zip')
+            shape_meta_py = _to_py(shape_meta)
+            pc_conf_py = _to_py(pc_preprocessor_config) if 'pc_preprocessor_config' in locals() else None
+            ld_conf_py = _to_py(low_dim_preprocessor_config) if 'low_dim_preprocessor_config' in locals() else None
+
+            cache_key = {
+                "shape_meta": shape_meta_py,
+                "downsample_factor": int(downsample_factor),
+                "downsample_use_all_offsets": bool(downsample_use_all_offsets),
+                "pc_preprocessor_config": pc_conf_py,
+                "lowdim_preprocessor_config": ld_conf_py,
+            }
+
+            cache_json = json.dumps(cache_key, sort_keys=True, ensure_ascii=False)
+            # cache_hash = hashlib.md5(cache_json.encode("utf-8")).hexdigest()
+            # cache_zarr_path = os.path.join(dataset_path, cache_hash + ".zarr.zip")
+            
+            # cache_json = json.dumps(cache_key, sort_keys=True)
+            cache_hash = hashlib.md5(cache_json.encode('utf-8')).hexdigest()
+            cache_zarr_path = os.path.join(dataset_path, cache_hash + '.zarr.zip')
             cache_lock_path = cache_zarr_path + '.lock'
             print('Acquiring lock on cache.')
             with FileLock(cache_lock_path):
@@ -88,7 +115,9 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                         shape_meta=shape_meta,
                         store=zarr.MemoryStore(),
                         pc_preprocessor=pc_preprocessor,
-                        lowdim_preprocessor=low_dim_preprocessor
+                        lowdim_preprocessor=low_dim_preprocessor,
+                        downsample_factor=downsample_factor,
+                        downsample_use_all_offsets=downsample_use_all_offsets
                     )
                     print('Saving cache to disk.')
                     with zarr.ZipStore(cache_zarr_path) as zip_store:
@@ -105,7 +134,9 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                 shape_meta=shape_meta,
                 store=zarr.MemoryStore(),
                 pc_preprocessor=pc_preprocessor,
-                lowdim_preprocessor=low_dim_preprocessor
+                lowdim_preprocessor=low_dim_preprocessor,
+                downsample_factor=downsample_factor,
+                downsample_use_all_offsets=downsample_use_all_offsets
             )
         
         # Parse shape meta to identify keys
@@ -121,6 +152,11 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
             seed=seed)
+        if group_by_offsets and downsample_use_all_offsets and downsample_factor > 1:
+            g = downsample_factor
+            n_groups = replay_buffer.n_episodes // g
+            group_val = get_val_mask(n_groups, val_ratio=val_ratio, seed=seed)
+            val_mask = np.repeat(group_val, g)[:replay_buffer.n_episodes]
         train_mask = ~val_mask
 
         if max_train_episodes is not None:
@@ -136,7 +172,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
             sequence_length=horizon+n_latency_steps,
             pad_before=pad_before, 
             pad_after=pad_after,
-            episode_mask=episode_mask,
+            episode_mask=train_mask,
             key_first_k=key_first_k)
         
         self.replay_buffer = replay_buffer
@@ -309,9 +345,12 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         input_coords_list = []
         input_feats_list = []
         for cloud in clouds:
-            coords = np.ascontiguousarray(cloud[:, :3] / self.voxel_size, dtype=np.int32)
-            input_coords_list.append(coords)
+            coords = np.floor(cloud[:, :3] / self.voxel_size).astype(np.int32)
+            coords = np.ascontiguousarray(coords)
+            
+            # Return unnormalized RGB in features
             input_feats_list.append(cloud.astype(np.float32))
+            input_coords_list.append(coords)
 
         return {
             'input_coords_list': input_coords_list,

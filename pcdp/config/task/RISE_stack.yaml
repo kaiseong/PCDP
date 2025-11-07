@@ -30,6 +30,9 @@ dataset:
 
   use_cache: True
   voxel_size: 0.005
+  downsample_factor: 4
+  downsample_use_all_offsets: True
+  group_by_offsets: True
   seed: 233
   val_ratio: 0.0
   max_train_episodes: null
@@ -48,7 +51,7 @@ dataset:
     enable_cropping: True
     enable_sampling: False
     target_num_points: 1024
-    enable_filter: True
+    enable_filter: False
     nb_points: 10
     sor_std: 1.7
     use_cuda: True
@@ -64,7 +67,7 @@ dataset:
     
     # Workspace bounds [x_min, x_max], [y_min, y_max], [z_min, z_max]
     workspace_bounds:
-      - [-0.000, 0.715]    # X range (meters)
+      - [-0.132, 0.715]    # X range (meters)
       - [-0.400, 0.350]   # Y range (meters)  
       - [-0.100, 0.600]    # Z range (meters)
     

@@ -32,7 +32,7 @@ def main():
         vis.create_window(window_name='default', width=1280, height=720)
         opt = vis.get_render_option()
         opt.point_size = 2.0
-        opt.background_color = np.array([0.0, 0.0, 0.0])
+        opt.background_color = np.array([0.9, 0.9, 0.9])
         pcd = o3d.geometry.PointCloud()
     
     first_iter = True
