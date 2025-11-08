@@ -88,6 +88,8 @@ def point_cloud_visualize(obs_episode):
                                         workspace_bounds=workspace_bounds,
                                         enable_sampling=False,
                                         enable_filter=True,
+                                        enable_transform=True,
+                                        enable_cropping=True,
                                         enable_temporal=True,
                                         export_mode="fused",
                                         temporal_prune_every=1,
@@ -104,8 +106,8 @@ def point_cloud_visualize(obs_episode):
     vis.create_window("Point Cloud Sequence", width=1280, height=720)
     
     opt = vis.get_render_option()
-    opt.point_size = 1.0
-    opt.background_color = np.array([0.5, 0.55, 0.5])
+    opt.point_size = 2.0
+    opt.background_color = np.array([0.0, 0.0, 0.0])
     
     pcd = o3d.geometry.PointCloud()
     is_first_frame = True
@@ -177,5 +179,5 @@ def analyze_episode_quality(obs_buffer, action_buffer, episode_name):
 
 if __name__ == "__main__":
     analyzer = EpisodeAnalyzer("/home/nscl/diffusion_policy/data/please_please/recorder_data")
-    obs_buffer, action_buffer = analyzer.load_episode('episode_0163')
-    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0163')
+    obs_buffer, action_buffer = analyzer.load_episode('episode_0123')
+    analyze_episode_quality(obs_buffer, action_buffer, 'episode_0123')

@@ -749,6 +749,7 @@ class PointCloudPreprocessor:
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
         _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
+        # _, ind = pcd.remove_radius_outlier(nb_points=12, radius=0.01)
         return points[ind]
 
 

@@ -23,6 +23,12 @@ from pcdp.common.replay_buffer import ReplayBuffer
 from pcdp.real_world.real_data_pc_conversion import PointCloudPreprocessor
 from pcdp.common import RISE_transformation as rise_tf
 
+# ==================== 시각화 옵션 (하드코딩) ====================
+SHOW_WORKSPACE = True
+SHOW_PLATFORM_FRAME = True
+SHOW_CAMERA_FRAME = True
+SHOW_EEF_FRAME = True
+
 # ==================== 카메라/좌표계 파라미터 ====================
 # 로봇↔베이스
 robot_to_base = np.array([
@@ -43,7 +49,7 @@ camera_to_base = np.array([
 workspace_bounds = np.array([
     [ 0.132, 0.715],   # X (m)
     [-0.400, 0.350],   # Y (m)
-    [-0.100, 0.600],   # Z (m)
+    [-0.100, 0.500],   # Z (m)
 ], dtype=np.float64)
 
 # 변환 행렬들
@@ -290,7 +296,7 @@ def interactive_visualize_with_gripper(obs_episode):
         workspace_bounds=workspace_bounds,
         enable_sampling=False,
         enable_transform=True,
-        enable_filter=False,
+        enable_filter=True,
         enable_cropping=True,
         nb_points=10,
         sor_std=1.7,
@@ -334,6 +340,8 @@ def interactive_visualize_with_gripper(obs_episode):
     robot_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=AXIS_SIZE_ROBOT)
     vis.add_geometry(robot_origin, reset_bounding_box=False)
     grip_axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=AXIS_SIZE_GRIP) if SHOW_GRIP_AXIS else None
+    eef_axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05) if SHOW_EEF_FRAME else None
+
 
     # ROI 준비
     close_i    = axis_index(ROI_CLOSE_AXIS)
@@ -352,10 +360,33 @@ def interactive_visualize_with_gripper(obs_episode):
     T_grip_local_offset = make_T(np.eye(3), GRIP_LOCAL_OFFSET)
     T_grip_local_rotZ   = make_T(rotz(np.deg2rad(ROTATE_AROUND_GRIP_Z_DEG)), np.zeros(3))
 
+    # Workspace and coordinate frames visualization
+    if SHOW_WORKSPACE:
+        ws_min = workspace_bounds[:, 0]
+        ws_max = workspace_bounds[:, 1]
+        ws_center = (ws_min + ws_max) / 2
+        ws_extent = ws_max - ws_min
+        workspace_box = make_box_lineset(ws_center, ws_extent, color=[0.5, 0.5, 1.0])
+        workspace_box.transform(base_to_robot)
+        vis.add_geometry(workspace_box, reset_bounding_box=False)
+
+    if SHOW_PLATFORM_FRAME:
+        platform_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, origin=[0,0,0])
+        platform_frame.transform(base_to_robot)
+        vis.add_geometry(platform_frame, reset_bounding_box=False)
+
+    if SHOW_CAMERA_FRAME:
+        camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.15, origin=[0,0,0])
+        T_robot_from_camera = base_to_robot @ camera_to_base
+        camera_frame.transform(T_robot_from_camera)
+        vis.add_geometry(camera_frame, reset_bounding_box=False)
+
+
     print("\n=== Keys ===\n[N] Next  [B] Back  [Q] Quit\n")
 
     first = True
     T_prev_grip = np.eye(4, dtype=np.float64)
+    T_prev_eef_grip = np.eye(4, dtype=np.float64)
     last_gap = None
     ANCHOR_MODE = "inner_face"
 
@@ -421,6 +452,9 @@ def interactive_visualize_with_gripper(obs_episode):
                 if SHOW_GRIP_AXIS and grip_axis is not None:
                     grip_axis.transform(T_robot_grip_vis)
                     vis.add_geometry(grip_axis, reset_bounding_box=False)
+                if SHOW_EEF_FRAME and eef_axis is not None:
+                    eef_axis.transform(T_robot_grip)
+                    vis.add_geometry(eef_axis, reset_bounding_box=False)
                 if SHOW_ROI:
                     vis.add_geometry(roi_left,  reset_bounding_box=False)
                     vis.add_geometry(roi_right, reset_bounding_box=False)
@@ -433,6 +467,7 @@ def interactive_visualize_with_gripper(obs_episode):
                 ctr.set_zoom(0.45)
 
                 T_prev_grip = T_robot_grip_vis.copy()
+                T_prev_eef_grip = T_robot_grip.copy()
                 first = False
             else:
                 vis.update_geometry(pcd)
@@ -440,10 +475,16 @@ def interactive_visualize_with_gripper(obs_episode):
                     delta_grip = T_robot_grip_vis @ np.linalg.inv(T_prev_grip)
                     grip_axis.transform(delta_grip)
                     vis.update_geometry(grip_axis)
+                if SHOW_EEF_FRAME and eef_axis is not None:
+                    delta_eef_grip = T_robot_grip @ np.linalg.inv(T_prev_eef_grip)
+                    eef_axis.transform(delta_eef_grip)
+                    vis.update_geometry(eef_axis)
                 if SHOW_ROI:
                     vis.update_geometry(roi_left)
                     vis.update_geometry(roi_right)
                 T_prev_grip = T_robot_grip_vis.copy()
+                T_prev_eef_grip = T_robot_grip.copy()
+
 
             # --- Depth 시각화 ---
             if SHOW_DEPTH_WIN:

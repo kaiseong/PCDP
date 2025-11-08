@@ -1,5 +1,5 @@
 """
-model_test.py
+model_test_RISE.py
 
 Usage:
 python debug/model_test.py checkpoint_path=/path/to/your/checkpoint.ckpt
@@ -42,7 +42,7 @@ robot_to_base = np.array([
 # Visualization constants
 EEF_FRAME_SIZE = 0.03
 POINT_SIZE = 2.0
-HORIZON = 16
+HORIZON = 20
 
 @hydra.main(version_base=None, config_path="../pcdp/config", config_name="train_diffusion_RISE_workspace")
 def main(cfg: OmegaConf):
@@ -50,7 +50,7 @@ def main(cfg: OmegaConf):
     OmegaConf.register_new_resolver("eval", eval)
     
     # --- Visualization Control ---
-    vis_gt = True
+    vis_gt = False
     vis_pred = True
     # ---------------------------
 
@@ -64,7 +64,7 @@ def main(cfg: OmegaConf):
     # --- 1. Load Checkpoint Path ---
     # The project_root is defined in the global scope.
     # We use it to create an absolute path to the checkpoint to avoid issues with Hydra's CWD management.
-    relative_path = "data/outputs/2025.09.26/01.51.44_train_diffusion_RISE_RISE_stack/checkpoints/policy_epoch_2000_seed_233.ckpt"
+    relative_path = "data/outputs/2025.10.31/RISE_Filter_ON/checkpoints/latest.ckpt"
     checkpoint_path = os.path.join(project_root, relative_path)
     
     if not os.path.exists(checkpoint_path):
@@ -121,8 +121,9 @@ def main(cfg: OmegaConf):
     
     # Get and set normalizer
     print("Computing normalizer from dataset...")
-    normalizer = dataset.get_normalizer(device=device)
-    model.set_normalizer(normalizer)
+    # normalizer = dataset.get_normalizer(device=device)
+    # model.set_normalizer(normalizer)
+    print("Using normalizer loaded from checkpoint (do not override).")
     print("Normalizer set on model.")
 
     dataloader = torch.utils.data.DataLoader(dataset, collate_fn=collate_fn, **cfg.dataloader)
@@ -135,7 +136,7 @@ def main(cfg: OmegaConf):
     vis.create_window("Model Test All Samples: Prediction vs Ground Truth", 1280, 720)
     opt = vis.get_render_option()
     opt.point_size = POINT_SIZE
-    opt.background_color = np.asarray([0.1, 0.1, 0.1])
+    opt.background_color = np.asarray([0.9, 0.9, 0.9])
 
     pcd = o3d.geometry.PointCloud()
     base_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
@@ -290,7 +291,7 @@ def main(cfg: OmegaConf):
                     geometries['pred_frames'].append(pred_frame_coord)
                     
                     # 2. Create the gripper status sphere
-                    if gripper_val > 0.8:
+                    if gripper_val > 60:
                         base_color = np.array([1.0, 0.0, 0.0]) # Red
                     else:
                         base_color = np.array([0.0, 0.0, 1.0]) # Blue
