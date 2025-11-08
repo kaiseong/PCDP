@@ -45,6 +45,7 @@ class EpisodeStreamer:
             episode_dir: pathlib.Path,
             save_batch_size: int = 30,
             compression_level: int =3,
+            save_data: bool = False,
     ):
         self.episode_dir = episode_dir
         self.episode_dir.mkdir(parents=True, exist_ok=True)

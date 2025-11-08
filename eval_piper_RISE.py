@@ -159,6 +159,8 @@ def main(input, output, match_episode, frequency, save_data):
             cnt=0
 
             test_start = 0
+            t2 = 0
+            
 
             while True:
                 t_cycle_end = t_start + (iter_idx + 1) * dt * 1
@@ -182,7 +184,8 @@ def main(input, output, match_episode, frequency, save_data):
                             env.end_episode()
                             is_evaluating = False
                             cprint("Evaluation stopped. Human in control.", "yellow")
-
+                
+                
                 if is_evaluating:
                     with torch.no_grad():
                         # 1. 관측 데이터 전처리 (학습 파이프라인과 일치시킴)
@@ -202,10 +205,10 @@ def main(input, output, match_episode, frequency, save_data):
                         
                         t1 = mono_time.now_ms()
                         if cnt%10 ==0:
-                            pred_action_10d = policy(cloud_data, batch_size=1).cpu()
+                            pred_action_10d = policy(cloud_data, batch_size=1)
 
                             print(f"inference: {mono_time.now_ms() - t1}")
-                            # print(f"loop time: {mono_time.now_ms() - t2}")
+                            print(f"loop time: {mono_time.now_ms() - t2}")
                             t2 = mono_time.now_ms()
 
                             # 3. 액션 후처리
@@ -235,7 +238,7 @@ def main(input, output, match_episode, frequency, save_data):
                             obs_timestamps = obs['timestamp']          # mono_time 기반이어야 함
                             L = len(action_sequence_7d)
                             action_offset = 0
-                            action_exec_latency = 0.0 # 100ms
+                            action_exec_latency = 0.02 # 100ms
 
                             action_timestamps = (np.arange(L, dtype=np.float64) + action_offset) * dt + obs_timestamps[-1]
                             is_new = action_timestamps > (mono_time.now_s() + action_exec_latency)
@@ -264,7 +267,7 @@ def main(input, output, match_episode, frequency, save_data):
                     # ===== 사람 제어 (Human Control) =====
                     target_pose = teleop.get_motion_state()
                     env.exec_actions(actions=[target_pose], timestamps=[mono_time.now_s() + dt])
-                print(f"loop time: {mono_time.now_ms() - t0}")
+                # print(f"loop time: {mono_time.now_ms() - t0}")
                 precise_wait(t_cycle_end)
                 iter_idx += 1
 

@@ -866,23 +866,27 @@ def create_default_preprocessor(target_num_points=1024, use_cuda=True, verbose=F
     )
 
 
-def downsample_obs_data(obs_data, downsample_factor=3):
+def downsample_obs_data(obs_data, downsample_factor=3, offset=0):
     """
-    Downsample observation data by taking every Nth sample.
-    
+    Downsample observation data by taking every Nth sample with a phase offset.
     Args:
-        obs_data: Dictionary of observation arrays
-        downsample_factor: Factor to downsample by (e.g., 3 for 30Hz->10Hz)
-        
-    Returns:
-        downsampled_data: Dictionary with downsampled arrays
+        obs_data: Dict[str, np.ndarray]
+        downsample_factor: int (e.g., 3 for 30→10Hz)
+        offset: int in [0, downsample_factor-1]
     """
+
     downsampled_data = {}
     for key, value in obs_data.items():
-        if isinstance(value, np.ndarray) and len(value.shape) > 0:
-            downsampled_data[key] = value[::downsample_factor].copy()
+        if isinstance(value, np.ndarray) and value.ndim > 0:
+            assert 0 <= offset < downsample_factor, "offset out of range"
+            downsampled_data[key] = value[offset::downsample_factor].copy()
         else:
             downsampled_data[key] = value
+
+        # if isinstance(value, np.ndarray) and len(value.shape) > 0:
+        #     downsampled_data[key] = value[::downsample_factor].copy()
+        # else:
+        #     downsampled_data[key] = value
     return downsampled_data
 
 
@@ -937,7 +941,8 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
 
 
 
-def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, downsample_factor=3):
+def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, 
+                            downsample_factor=3, downsample_offset=0):
     """
     Process a single episode: load, downsample, align, and optionally preprocess.
     
@@ -952,7 +957,6 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     """
 
     episode_path = pathlib.Path(episode_path)
-
     if pc_preprocessor is not None and hasattr(pc_preprocessor, "reset_temporal"):
         pc_preprocessor.reset_temporal()
     
@@ -973,8 +977,8 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     for key in action_replay_buffer.keys():
         action_data[key] = action_replay_buffer[key][:]
 
-    # Downsample obs data from 30Hz to 10Hz
-    downsampled_obs = downsample_obs_data(obs_data, downsample_factor)
+    # Downsample obs data with phase offset
+    downsampled_obs = downsample_obs_data(obs_data, downsample_factor=downsample_factor, offset=downsample_offset)
     downsampled_obs_timestamps = downsampled_obs['align_timestamp']
     action_timestamps = action_data['timestamp']
     
@@ -1119,6 +1123,7 @@ def _get_replay_buffer(
         pc_preprocessor: Optional[PointCloudPreprocessor] = None,
         lowdim_preprocessor: Optional[LowDimPreprocessor] = None,
         downsample_factor: int = 3,
+        downsample_use_all_offsets: bool = False,
         max_episodes: Optional[int] = None,
         n_workers: int = 1
 ) -> ReplayBuffer:
@@ -1152,7 +1157,7 @@ def _get_replay_buffer(
     print(f"  - Pointcloud keys: {pointcloud_keys}")
     print(f"  - Lowdim keys: {lowdim_keys}")
     print(f"  - Action shape: {shape_meta.get('action', {}).get('shape', 'undefined')}")
-    
+    print(f"  - downsample_factor: {downsample_factor}")
     # Find all episode directories
     episode_dirs = []
     for item in sorted(dataset_path.iterdir()):
@@ -1172,31 +1177,41 @@ def _get_replay_buffer(
     
     # Process episodes
     with tqdm(total=len(episode_dirs), desc="Processing episodes", mininterval=1.0) as pbar:
+        offsets = list(range(downsample_factor)) if downsample_use_all_offsets else [0]
         for episode_dir in episode_dirs:
             try:
-                episode_data = process_single_episode(
-                    episode_dir, pc_preprocessor, lowdim_preprocessor, downsample_factor)
-                
-                if episode_data is not None:
-                    # Validate episode data against shape_meta
-                    if validate_episode_data_with_shape_meta(episode_data, shape_meta):
-                        # Ensure all data are numpy arrays before adding to buffer
-                        for key in episode_data.keys():
-                            if isinstance(episode_data[key], list):
-                                episode_data[key] = np.asarray(episode_data[key])
-                        
-                        # Add episode to replay buffer
-                        replay_buffer.add_episode(episode_data,
-                            object_codecs={'pointcloud': numcodecs.Pickle()})
-                        pbar.set_postfix(
-                            episodes=replay_buffer.n_episodes,
-                            steps=replay_buffer.n_steps
-                        )
+                for off in offsets:
+                    episode_data = process_single_episode(
+                        episode_dir, 
+                        pc_preprocessor, 
+                        lowdim_preprocessor, 
+                        downsample_factor,
+                        downsample_offset=off
+                    )
+
+                    if episode_data is not None:
+                        # Validate episode data against shape_meta
+                        if validate_episode_data_with_shape_meta(episode_data, shape_meta):
+                            # Ensure all data are numpy arrays before adding to buffer
+                            L = len(episode_data['align_timestamp'])
+                            episode_data['meta_source_episode'] = np.array([episode_dir.name]*L, dtype='S64')
+                            episode_data['meta_downsample_offset'] = np.full((L,), off, dtype=np.int16)
+                            for key in episode_data.keys():
+                                if isinstance(episode_data[key], list):
+                                    episode_data[key] = np.asarray(episode_data[key])
+
+                            # Add episode to replay buffer
+                            replay_buffer.add_episode(episode_data,
+                                object_codecs={'pointcloud': numcodecs.Pickle()})
+                            pbar.set_postfix(
+                                episodes=replay_buffer.n_episodes,
+                                steps=replay_buffer.n_steps
+                            )
+                        else:
+                            print(f"Skipping episode {episode_dir.name} due to shape validation failure")
                     else:
-                        print(f"Skipping episode {episode_dir.name} due to shape validation failure")
-                else:
-                    print(f"Skipping empty episode: {episode_dir.name}")
-                    
+                        print(f"Skipping empty episode: {episode_dir.name}")
+
             except Exception as e:
                 print(f"Error processing {episode_dir.name}: {e}")
                 continue

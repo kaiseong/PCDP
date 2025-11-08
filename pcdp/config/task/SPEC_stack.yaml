@@ -36,6 +36,9 @@ dataset:
   val_ratio: 0.00
   max_train_episodes: null
   voxel_size: 0.005
+  downsample_factor: 4
+  downsample_use_all_offsets: True
+  group_by_offsets: True
   
 
   enable_pc_preprocessing: True
@@ -48,7 +51,7 @@ dataset:
     nb_points: 10
     sor_std: 1.7
     use_cuda: True
-    verbose: True
+    verbose: False
     enable_temporal: True
     export_mode: fused
     temporal_voxel_size: ${task.dataset.voxel_size}

@@ -88,7 +88,8 @@ robot_to_base = np.array([
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
-def main(output, visual, init_joints, frequency, command_latency):
+@click.option('--save-data', is_flag=True, default=True, help="Enable saving episode data (pointcloud, robot state).")
+def main(output, visual, init_joints, frequency, command_latency, save_data):
     dt = 1/frequency
     
     # IK parameters
@@ -111,7 +112,8 @@ def main(output, visual, init_joints, frequency, command_latency):
                 frequency=frequency,
                 init_joints=init_joints,
                 orbbec_mode="C2D",
-                shm_manager=shm_manager
+                shm_manager=shm_manager,
+                save_data=save_data
             ) as env:
             cv2.setNumThreads(1)
             
