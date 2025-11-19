@@ -59,9 +59,9 @@ ROTATE_AROUND_GRIP_Z_DEG = 90.0  # 필요하면 ±90 등
 # ROI(좌/우 턱) 정의 (그리퍼 프레임 로컬 축 기준)
 ROI_CLOSE_AXIS    = 'x'   # 닫힘축: 'x'|'y'|'z'
 ROI_APPROACH_AXIS = 'y'   # 접근축(닫힘축과 달라야 함)
-ROI_THICKNESS = 0.050     # 각 턱 박스 두께 (닫힘축 방향, m)
-ROI_DEPTH     = 0.030     # 접근축 길이 (m)
-ROI_HEIGHT    = 0.050     # 나머지 축 길이 (m)
+ROI_THICKNESS = 0.000     # 각 턱 박스 두께 (닫힘축 방향, m)
+ROI_DEPTH     = 0.000     # 접근축 길이 (m)
+ROI_HEIGHT    = 0.000     # 나머지 축 길이 (m)
 ROI_CENTER_OFFSET = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
 # gripper_width → ROI_GAP 매핑(필요 시 스케일/오프셋 보정)
@@ -73,7 +73,7 @@ ROI_MAX_GAP           = 0.150  # 물리적 최대 간격
 SMOOTH_GAP_ALPHA      = 0.0    # 0.0이면 스무딩 안함, 0.3~0.7 추천
 
 SHOW_ROI       = True
-SHOW_GRIP_AXIS = True
+SHOW_GRIP_AXIS = False
 AXIS_SIZE_ROBOT= 0.10
 AXIS_SIZE_GRIP = 0.06
 
@@ -222,7 +222,7 @@ def interactive_visualize_with_gripper(obs_episode):
         enable_filter=True,
         nb_points=10, 
         sor_std=1.7,
-        enable_temporal=True,
+        enable_temporal=False,
         export_mode="fused",
         verbose=False,
         temporal_decay=0.99
@@ -232,6 +232,8 @@ def interactive_visualize_with_gripper(obs_episode):
     controller = VisController(num_steps)
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window("Episode Inspector (Robot + Grip ROI) [N/B/Q]", width=1280, height=720)
+    opt = vis.get_render_option()
+    opt.point_size = 3.0
     is_running = True
     def cb_exit(v): 
         nonlocal is_running; is_running = False; return False
@@ -241,7 +243,7 @@ def interactive_visualize_with_gripper(obs_episode):
 
     # --- Geometries
     pcd = o3d.geometry.PointCloud()
-    robot_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=AXIS_SIZE_ROBOT)
+    robot_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.01)
     vis.add_geometry(robot_origin, reset_bounding_box=False)
     grip_axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=AXIS_SIZE_GRIP) if SHOW_GRIP_AXIS else None
 
@@ -277,6 +279,7 @@ def interactive_visualize_with_gripper(obs_episode):
 
             # --- Point cloud: Cam->Base (preprocess), then Base->Robot
             pc_base = preprocess(pts_seq[step])
+            print(f"points: {pc_base.shape}")
             if pc_base.size == 0:
                 controller.vis_changed = False
                 vis.poll_events(); vis.update_renderer(); time.sleep(0.01); continue

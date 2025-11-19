@@ -31,8 +31,8 @@ dataset:
   use_cache: True
   voxel_size: 0.005
   downsample_factor: 4
-  downsample_use_all_offsets: True
-  group_by_offsets: True
+  downsample_use_all_offsets: False
+  group_by_offsets: False
   seed: 233
   val_ratio: 0.0
   max_train_episodes: null
