@@ -85,7 +85,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=SOR, Downsample=4, No offset, batch_size=120)"
+  name: "SPEC_mono${now:%Y.%m.%d}- (fused, Filter=ROR, Downsample=4, No offset, batch_size=120)"
   project: STACK_Final
   resume: true
   tags:
