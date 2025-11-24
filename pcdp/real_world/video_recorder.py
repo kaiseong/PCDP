@@ -85,13 +85,11 @@ class VideoRecorder(mp.Process):
                             if current_timestamp > self.last_processed_timestamp:
                                 self.last_processed_timestamp = current_timestamp
 
-                                # 타임스탬프 수집 및 경고 출력 로직
                                 capture_timestamp = frame_data.get('camera_capture_timestamp')
                                 if capture_timestamp is not None:
-                                    self.timestamp_buffer.append(capture_timestamp)
+                                    # self.timestamp_buffer.append(capture_timestamp)
                                     if self.last_capture_timestamp is not None:
                                         time_delta = capture_timestamp - self.last_capture_timestamp
-                                        # 50ms 이상 차이날 경우 경고 출력 (타임스탬프가 초 단위라고 가정)
                                         if time_delta > 50:
                                             cprint(f"[{self.name}] Frame drop detected! Gap: {time_delta:.2f} ms", "red", attrs=["bold"])
                                     self.last_capture_timestamp = capture_timestamp
@@ -161,7 +159,7 @@ class VideoRecorder(mp.Process):
                         # 타임스탬프 수집 및 경고 출력 로직 (Final flush에서도 동일하게 수행)
                         capture_timestamp = frame_data.get('camera_capture_timestamp')
                         if capture_timestamp is not None:
-                            self.timestamp_buffer.append(capture_timestamp)
+                            # self.timestamp_buffer.append(capture_timestamp)
                             if self.last_capture_timestamp is not None:
                                 time_delta = capture_timestamp - self.last_capture_timestamp
                                 if time_delta > 50:
@@ -187,19 +185,6 @@ class VideoRecorder(mp.Process):
             self.container.close()
             cprint(f"[{self.name}] Episode finalized with {self.n_frames_recorded} video frames", "cyan", attrs=["bold"])
 
-            # CSV 파일 저장
-            if self.csv_path and self.timestamp_buffer:
-                try:
-                    np.savetxt(
-                        self.csv_path,
-                        np.array(self.timestamp_buffer),
-                        delimiter=',',
-                        header='camera_capture_timestamp',
-                        fmt='%.6f'
-                    )
-                    cprint(f"[{self.name}] Saved {len(self.timestamp_buffer)} timestamps to {self.csv_path}", "green", attrs=["bold"])
-                except Exception as e:
-                    cprint(f"[{self.name}] Failed to save timestamps CSV: {e}", "red", attrs=["bold"])
 
         except Exception as e:
             cprint(f"[{self.name}] Error closing video container: {e}", "red", attrs=["bold"])

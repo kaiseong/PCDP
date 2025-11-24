@@ -1,4 +1,5 @@
 # real_data_pc_conversion.py
+
 from typing import Sequence, Tuple, Dict, Optional, Union, List
 import os
 import pathlib
@@ -30,16 +31,8 @@ robot_to_base = np.array([
 ])
 
 class PointCloudPreprocessor:
-    """Pointcloud preprocessing with optional temporal memory for fused cache export.
-    When enable_temporal=True and export_mode='fused', each call to `process(points)`
-    updates a stateful voxel map (per episode) with exponential decay and returns
-    an Nx7 array: [x,y,z,r,g,b,c], where `c` is temporal confidence (recency).
 
-    추가:
-    - 미관측 누적 프루닝(miss counter): 같은 메모리 점이 연속 K프레임 동안 관측되지 않으면 삭제.
-    """
 
-    # ---------- Orbbec→OpenCV 변환 유틸 ----------
     @staticmethod
     def _is_orbbec_intrinsics(obj) -> bool:
         return all(hasattr(obj, a) for a in ("fx", "fy", "cx", "cy"))
@@ -89,17 +82,16 @@ class PointCloudPreprocessor:
                 temporal_c_min=0.20,
                 temporal_prune_every: int=1,
                 stable_export: bool = False,
-                enable_occlusion_prune: bool = True,
+                enable_occlusion_prune: bool = False,
                 depth_width: Optional[int] = 320,
                 depth_height: Optional[int] = 288,
-                K_depth: Optional[Sequence[Sequence[float]]] = None,    # 3x3
-                dist_depth: Optional[Sequence[float]] = None,           # None or 4/5/8계수
+                K_depth: Optional[Sequence[Sequence[float]]] = None,    
+                dist_depth: Optional[Sequence[float]] = None,           
                 erode_k: int = 1,
                 z_unit: str = 'm',   # 'm' or 'mm'
                 occl_patch_radius: int = 2,
-                # ▼ 신규 파라미터
-                miss_prune_frames: int = 20,   # 연속 미관측 프레임 임계
-                miss_min_age: int = 2         # 너무 새로 추가된 점은 보호
+                miss_prune_frames: int = 20,   
+                miss_min_age: int = 2         
                 ):
 
         if extrinsics_matrix is None:
@@ -115,9 +107,9 @@ class PointCloudPreprocessor:
         # Default workspace bounds
         if workspace_bounds is None:
             self.workspace_bounds = [
-                [0.132, 0.715],    # X range (m)
-                [-0.400, 0.350],    # Y range (m)
-                [-0.100, 0.400]     # Z range (m)
+                [0.132, 0.715],    
+                [-0.400, 0.350],   
+                [-0.100, 0.400]    
             ]
         else:
             self.workspace_bounds = workspace_bounds
@@ -136,7 +128,6 @@ class PointCloudPreprocessor:
         assert self._K_depth.shape == (3, 3), f"K_depth must be 3x3, got {self._K_depth.shape}"
 
         if dist_depth is None:
-            # [k1 k2 p1 p2 k3 k4 k5 k6]
             self._dist_depth = np.array(
                 [11.690222, 5.343991, 0.000065, 0.000014, 0.172997, 12.017323, 9.254467, 1.165690],
                 dtype=np.float64)
@@ -158,7 +149,6 @@ class PointCloudPreprocessor:
         self.use_cuda = bool(use_cuda and torch.cuda.is_available())
         self.verbose = verbose
         
-        # temporal memory
         self.enable_temporal = enable_temporal
         self.export_mode = export_mode
         self._temporal_voxel_size = float(temporal_voxel_size)
@@ -167,7 +157,6 @@ class PointCloudPreprocessor:
         self._prune_every = int(max(1, temporal_prune_every))
         self._stable_export = bool(stable_export)
             
-        # occlusion prune
         self.enable_occlusion_prune = bool(enable_occlusion_prune)
         self._depth_w = int(depth_width) 
         self._depth_h = int(depth_height) 
@@ -176,11 +165,9 @@ class PointCloudPreprocessor:
         self.occl_patch_radius = int(occl_patch_radius)
         
 
-        # miss-based prune params
         self._miss_prune_frames = int(miss_prune_frames)
         self._miss_min_age = int(miss_min_age)
 
-        # Base->Camera 사전 계산
         self._base_to_cam = None
         if self.enable_occlusion_prune:
             if self.extrinsics_matrix is None:
@@ -194,12 +181,12 @@ class PointCloudPreprocessor:
         self._mem_xyz = np.empty((0, 3), dtype=np.float32)
         self._mem_rgb = np.empty((0, 3), dtype=np.float32)
         self._mem_step = np.empty((0, ), dtype=np.int32)
-        self._mem_miss = np.empty((0, ), dtype=np.int16)  # 연속 미관측 카운터
+        self._mem_miss = np.empty((0, ), dtype=np.int16)  
 
         # 
-        self._mem_u    = np.empty((0,), dtype=np.int32)     # -1이면 화면 밖
-        self._mem_v    = np.empty((0,), dtype=np.int32)     # -1이면 화면 밖
-        self._mem_zcam = np.empty((0,), dtype=np.float32)   # 0이면 invalid
+        self._mem_u    = np.empty((0,), dtype=np.int32)   
+        self._mem_v    = np.empty((0,), dtype=np.int32)   
+        self._mem_zcam = np.empty((0,), dtype=np.float32) 
 
 
         if 0.0 < self._temporal_decay < 1.0 and 0.0 < self._temporal_c_min < 1.0:
@@ -214,7 +201,6 @@ class PointCloudPreprocessor:
             print(f"  - Sampling: {self.enable_sampling} (target: {self.target_num_points})")
             print(f"  - CUDA: {self.use_cuda}")
         
-        # === GPU-only guard for time3 path ===
         if (self.enable_temporal and self.export_mode == 'fused') or self.enable_occlusion_prune:
             if not self.use_cuda:
                 raise RuntimeError(
@@ -227,7 +213,6 @@ class PointCloudPreprocessor:
         return self.process(points)
 
     def _erode_min(self, depth_u16: np.ndarray):
-        """깊이가 작은(가까운) 값을 국소적으로 확장시키는 최소필터."""
         k = self._erode_k
         if k <= 0: 
             return depth_u16
@@ -239,14 +224,12 @@ class PointCloudPreprocessor:
         d[zero] = 0
         return d
 
-    # --- [NEW] Torch 카메라 버퍼 준비(한 번만) ---
     def _maybe_init_torch_camera(self):
         if not self.use_cuda:
             return
         dev = torch.device("cuda")
         self._device = dev
 
-        # K / dist 텐서 준비
         self._K_depth_t = torch.tensor(self._K_depth, dtype=torch.float32, device=dev)
 
         if self._dist_depth is None:
@@ -263,13 +246,11 @@ class PointCloudPreprocessor:
                 dist8 = np.zeros(8, dtype=np.float64)
         self._dist_depth_t = torch.tensor(dist8, dtype=torch.float32, device=dev)
 
-        # Base→Cam 텐서는 있을 때만 생성 (occlusion prune에서만 필요)
         if getattr(self, "_base_to_cam", None) is not None:
             self._base_to_cam_t = torch.tensor(self._base_to_cam.astype(np.float32), device=dev)
         else:
             self._base_to_cam_t = None
 
-    # --- [NEW] OpenCV rational(8) 왜곡 모델 (Torch) ---
     def _opencv_rational_distort_torch(self, xn: torch.Tensor, yn: torch.Tensor):
         k = self._dist_depth_t  # [k1,k2,p1,p2,k3,k4,k5,k6]
         k1, k2, p1, p2, k3, k4, k5, k6 = k
@@ -283,9 +264,7 @@ class PointCloudPreprocessor:
         yd = yn * radial + y_tan
         return xd, yd
 
-    # --- [NEW] 카메라 좌표계 → 픽셀 (Torch) ---
     def _project_points_cam_torch(self, xyz_cam_t: torch.Tensor):
-        # xyz_cam_t: (N,3) float32 CUDA
         if xyz_cam_t.numel() == 0:
             empty_i32 = np.array([], dtype=np.int32)
             empty_f64 = np.array([], dtype=np.float64)
@@ -327,10 +306,9 @@ class PointCloudPreprocessor:
         v = v[inb]
         z_out = pts[inb, 2]
 
-        # 원래 인덱스로 복원
         orig_idx = torch.nonzero(valid, as_tuple=False).squeeze(1)[inb]
 
-        orig_idx_np = orig_idx.detach().cpu().numpy().astype(np.int64)  # <-- int 인덱스
+        orig_idx_np = orig_idx.detach().cpu().numpy().astype(np.int64)  
         return (
             u.detach().cpu().numpy(),
             v.detach().cpu().numpy(),
@@ -339,12 +317,11 @@ class PointCloudPreprocessor:
         )
         
 
-    # --- [NEW] Base→Cam → 픽셀 (Torch) ---
     def _project_base_to_cam_torch(self, xyz_base_np: np.ndarray):
         if xyz_base_np.size == 0:
             empty_i32 = np.array([], dtype=np.int32)
             empty_f64 = np.array([], dtype=np.float64)
-            empty_int = np.array([], dtype=np.int64)  # <-- int 로
+            empty_int = np.array([], dtype=np.int64)  
             return empty_i32, empty_i32, empty_f64, empty_int
 
         self._maybe_init_torch_camera()
@@ -353,13 +330,12 @@ class PointCloudPreprocessor:
 
         xyz = torch.from_numpy(xyz_base_np.astype(np.float32, copy=False)).to(self._device)
         ones = torch.ones((xyz.shape[0], 1), dtype=torch.float32, device=self._device)
-        xyz1 = torch.cat([xyz, ones], dim=1)  # (N,4)
-        xyz_cam = (xyz1 @ self._base_to_cam_t.T)[:, :3]  # (N,3)
+        xyz1 = torch.cat([xyz, ones], dim=1)  
+        xyz_cam = (xyz1 @ self._base_to_cam_t.T)[:, :3]  
         return self._project_points_cam_torch(xyz_cam)
 
 
     def reset_temporal(self):
-        """Call at the start of each episode."""
         self._frame_idx = 0
         self._mem_keys = np.empty((0, ), dtype=np.dtype((np.void, 12)))
         self._mem_xyz   = np.empty((0, 3), dtype=np.float32)
@@ -372,16 +348,12 @@ class PointCloudPreprocessor:
         self._mem_zcam = np.empty((0,), dtype=np.float32)
 
     def voxel_keys_from_xyz(self, xyz:np.ndarray):
-        grid = np.floor(xyz / self._temporal_voxel_size).astype(np.int32, copy=False) # (N, 3)
+        grid = np.floor(xyz / self._temporal_voxel_size).astype(np.int32, copy=False) 
         grid = np.ascontiguousarray(grid)
-        keys = grid.view(np.dtype((np.void, 12))).ravel() # (N, ) 12byte key
+        keys = grid.view(np.dtype((np.void, 12))).ravel() 
         return keys
 
     def _frame_unique_torch(self, xyz_np: np.ndarray, rgb_np: np.ndarray, last_wins: bool=False):
-        """
-        CUDA로 프레임 내 voxel-unique 수행 + keys_new 생성.
-        returns: (xyz_unique_np, rgb_unique_np, keys_new_np_void)
-        """
         if xyz_np.shape[0] == 0:
             empty_keys = np.empty((0,), dtype=np.dtype((np.void, 12)))
             return xyz_np, rgb_np, empty_keys
@@ -389,19 +361,15 @@ class PointCloudPreprocessor:
         device = torch.device("cuda")
         xyz_t = torch.from_numpy(xyz_np.astype(np.float32, copy=False)).to(device)
 
-        # grid = floor(xyz / voxel), int32
-        grid_t = torch.floor(xyz_t / float(self._temporal_voxel_size)).to(torch.int32)  # (N,3)
+        grid_t = torch.floor(xyz_t / float(self._temporal_voxel_size)).to(torch.int32)  
 
-        # unique over rows (dim=0) — 인덱스는 scatter_reduce로 구함
         uniq, inv = torch.unique(grid_t, dim=0, return_inverse=True)
         idx_all = torch.arange(grid_t.shape[0], device=device, dtype=torch.int64)
 
         if last_wins:
-            # 각 uniq에 대해 마지막 인덱스
             idx_sel = torch.zeros(uniq.shape[0], dtype=torch.int64, device=device)
             idx_sel.scatter_reduce_(0, inv, idx_all, reduce='amax', include_self=False)
         else:
-            # 각 uniq에 대해 첫 인덱스
             big = torch.iinfo(torch.int64).max
             idx_sel = torch.full((uniq.shape[0],), big, dtype=torch.int64, device=device)
             idx_sel.scatter_reduce_(0, inv, idx_all, reduce='amin', include_self=True)
@@ -410,8 +378,7 @@ class PointCloudPreprocessor:
         xyz_unique = xyz_np[idx_np]
         rgb_unique = rgb_np[idx_np]
 
-        # keys_new: (U,3) int32 -> np.void(12B)
-        grid_sel = uniq.detach().cpu().numpy().astype(np.int32)        # (U,3) int32
+        grid_sel = uniq.detach().cpu().numpy().astype(np.int32)        
         keys_new = np.ascontiguousarray(grid_sel).view(np.dtype((np.void, 12))).ravel()
 
         return xyz_unique, rgb_unique, keys_new
@@ -435,7 +402,6 @@ class PointCloudPreprocessor:
                 u_add, v_add, z_add = self._project_and_pack(self._mem_xyz)
                 self._mem_u, self._mem_v, self._mem_zcam = u_add, v_add, z_add
             else:
-                # pruner 비활성화 시에도 일관된 상태를 위해 빈 캐시로 맞춰둠
                 self._mem_u    = np.empty((0,), dtype=np.int32)
                 self._mem_v    = np.empty((0,), dtype=np.int32)
                 self._mem_zcam = np.empty((0,), dtype=np.float32)
@@ -447,7 +413,6 @@ class PointCloudPreprocessor:
             self._mem_rgb[idx_mem]  = rgb_new[idx_new]
             self._mem_step[idx_mem] = now_step
             self._mem_miss[idx_mem] = 0
-            # [ADD] 공통 갱신분만 투영 캐시 갱신
             if self.enable_occlusion_prune:
                 u_upd, v_upd, z_upd = self._project_and_pack(xyz_new[idx_new])
                 self._mem_u[idx_mem]    = u_upd
@@ -458,7 +423,7 @@ class PointCloudPreprocessor:
         if common.size > 0:
             mask_new_only[idx_new] = False
         if mask_new_only.any():
-            add_xyz  = xyz_new[mask_new_only]        # [FIX] 누락된 정의
+            add_xyz  = xyz_new[mask_new_only]        
             add_rgb  = rgb_new[mask_new_only]
             add_keys = keys_new[mask_new_only]
             self._mem_keys = np.concatenate([self._mem_keys, add_keys], axis=0)
@@ -468,7 +433,6 @@ class PointCloudPreprocessor:
                                              np.full((add_xyz.shape[0],), now_step, dtype=np.int32)], axis=0)
             self._mem_miss = np.concatenate([self._mem_miss,
                                              np.zeros((add_xyz.shape[0],), dtype=np.int16)], axis=0)
-            # [ADD] 신규분만 투영 캐시 append
             if self.enable_occlusion_prune: 
                 u_add, v_add, z_add = self._project_and_pack(add_xyz)
                 self._mem_u    = np.concatenate([self._mem_u,    u_add], axis=0)
@@ -512,12 +476,11 @@ class PointCloudPreprocessor:
         if u.size == 0:
             return np.zeros((H, W), dtype=np.float32)
 
-        device = self._device  # set in _maybe_init_torch_camera
+        device = self._device 
         pix = torch.from_numpy((v * W + u).astype(np.int64)).to(device, non_blocking=True)
         zt  = torch.from_numpy(z_m.astype(np.float32, copy=False)).to(device, non_blocking=True)
 
         Z = torch.full((H * W,), float("inf"), device=device, dtype=torch.float32)
-        # amin reduce (PyTorch 2.x: scatter_reduce, 1.13~ 호환용 try/except 유지)
         try:
             Z = torch.scatter_reduce(Z, 0, pix, zt, reduce='amin', include_self=True)
         except TypeError:
@@ -538,7 +501,7 @@ class PointCloudPreprocessor:
         Zt = torch.from_numpy(Z.astype(np.float32, copy=False)).to(device, non_blocking=True)
         sent = torch.tensor(1e6, device=device, dtype=torch.float32)
 
-        Zt = torch.where(Zt <= 0.0, sent, Zt)  # zeros -> sentinel
+        Zt = torch.where(Zt <= 0.0, sent, Zt) 
 
         pad = k // 2
         Zn = (-Zt).view(1, 1, *Zt.shape)
@@ -566,7 +529,6 @@ class PointCloudPreprocessor:
         return u_arr, v_arr, z_arr
 
 
-    # [ADD] 공통 삭제 유틸: keep_mask로 모든 버퍼 동기 슬라이싱
     def _delete_mask(self, keep_mask: np.ndarray):
         self._mem_keys = self._mem_keys[keep_mask]
         self._mem_xyz  = self._mem_xyz[keep_mask]
@@ -584,7 +546,6 @@ class PointCloudPreprocessor:
         if now_xyz_base.size == 0:
             return
 
-        # 1) 현재 프레임 Z_full(미터) 1회 생성 (GPU-only)
         u_now, v_now, z_now, _ = self._project_base_to_cam_torch(now_xyz_base)
         if u_now.size == 0:
             if self._mem_miss.size > 0:
@@ -593,11 +554,9 @@ class PointCloudPreprocessor:
 
         Z_full = self._rasterize_min_float_torch(u_now, v_now, z_now, self._depth_h, self._depth_w)
 
-        # 2) 전역 패치-최소 1회 계산 (GPU-only)
         k = 2 * self.occl_patch_radius + 1 if self.occl_patch_radius > 0 else 1
         Z_min = self._min_filter2d_float_torch(Z_full, k)
 
-        # 3) 메모리 픽셀 캐시 인덱싱
         valid_mem = (self._mem_u >= 0) & (self._mem_v >= 0) & (self._mem_zcam > 0.0)
         if not np.any(valid_mem):
             if self._mem_miss.size > 0:
@@ -609,69 +568,48 @@ class PointCloudPreprocessor:
         z_m = self._mem_zcam[valid_mem]  # meters
         z_now_at = Z_min[v_m, u_m]       # meters
 
-        # --- A) LOS 즉시 삭제: now>0 & (mem 앞) → 삭제
         del_local_valid = (z_now_at > 0.0) & (z_m < z_now_at)
         del_local_mask = np.zeros_like(valid_mem, dtype=bool)
         del_local_mask[np.where(valid_mem)[0][del_local_valid]] = True
 
-        # --- B) miss 누적 업데이트
         hit_mask_global = np.zeros_like(valid_mem, dtype=bool)
         hit_mask_global[np.where(valid_mem)[0][z_now_at > 0.0]] = True
         self._mem_miss[hit_mask_global] = 0
         self._mem_miss[~hit_mask_global] = np.minimum(self._mem_miss[~hit_mask_global] + 1, np.int16(32767))
 
-        # --- C) 미관측 기반 삭제
         age_all = (self._frame_idx - self._mem_step)
         del_by_miss = (self._mem_miss >= self._miss_prune_frames) & (age_all >= self._miss_min_age)
 
-        # --- 최종 적용
         if np.any(del_local_mask) or np.any(del_by_miss):
             keep_global = ~(del_local_mask | del_by_miss)
             self._delete_mask(keep_global)
 
 
     def process(self, points):
-        """
-        Process pointcloud through transformation, cropping, and sampling.
-        Args:
-            points: numpy array of shape (N, 6) containing XYZRGB data
-        Returns:
-            processed_points: numpy array of processed pointcloud
-        """
         if points is None or len(points) == 0:
             if self.enable_temporal and self.export_mode == 'fused':
                 self._frame_idx += 1
                 return np.zeros((0,7), dtype=np.float32)
             return np.zeros((self.target_num_points, 6), dtype=np.float32)
             
-        # Ensure points is float32
         points = points.astype(np.float32)
-        t0 = mono_time.now_ms()
-        # Coordinate transformation
         if self.enable_transform:
             points = self._apply_transform(points)
-        # Workspace cropping
-        t1 = mono_time.now_ms()
         if self.enable_cropping:
             points = self._crop_workspace(points)
-        t2 = mono_time.now_ms()
         if self.enable_filter:
             points = self._apply_filter(points)
         if not self.enable_temporal or self.export_mode!="fused":
-            # Point FPS sampling
             if self.enable_sampling:
                 points = self._sample_points(points)
             return points
         
-        t3 = mono_time.now_ms()
 
         now_step = self._frame_idx
 
-        # 1) 프레임 내 voxel-unique
         xyz_now = points[:, :3]
         rgb_now = points[:, 3:6]
 
-        # 2) 프레임 시작 시 과거 잔상 정리(LOS + miss prune)
         if self.enable_occlusion_prune:
             self._occlusion_prune_memory_fast(points[:, :3])
         
@@ -680,40 +618,23 @@ class PointCloudPreprocessor:
         self._merge_into_mem(xyz_now, rgb_now, now_step, keys_new=keys_new)
 
 
-        # 4) 주기적 프루닝(decay^age < c_min)
         self._prune_mem(now_step)
 
-        # 5) export
         out = self._export_array_from_mem(now_step)
         
-        if self.verbose and out.shape[0] > 0:
-            out_dbg = out.copy()
-            rgb = out_dbg[:, 3:6].astype(np.float32, copy=False)
-            c   = np.clip(out[:, 6:7], 0.0, 1.0)
-            s = 255.0 if (rgb.max() > 1.0 + 1e-6) else 1.0
-            out_dbg[:, 3:6] = np.clip((rgb/s) * c, 0.0, 1.0) * s
-            print(f"c: {c}")
-            print(f"time0: {t1 - t0}")
-            print(f"time1: {t2 - t1}")
-            print(f"time2: {t3 - t2}")
-            print(f"time3: {mono_time.now_ms() - t3}")
         
         self._frame_idx += 1
         return out
 
 
     def _apply_transform(self, points):
-        """Apply extrinsics transformation and scaling."""
-        # Scale from mm to m (Orbbec specific)
 
         points = points[points[:, 2] > 0.0]
         point_xyz = points[:, :3] * 0.001
         
-        # Apply extrinsics transformation
         point_homogeneous = np.hstack((point_xyz, np.ones((point_xyz.shape[0], 1))))
         point_transformed = np.dot(point_homogeneous, self.extrinsics_matrix.T)
         
-        # Update XYZ coordinates
         points[:, :3] = point_transformed[:, :3]
         
         if self.verbose and len(points) > 0:
@@ -723,7 +644,6 @@ class PointCloudPreprocessor:
         return points
         
     def _crop_workspace(self, points):
-        """Crop points to workspace bounds."""
         if len(points) == 0:
             return points
             
@@ -748,31 +668,27 @@ class PointCloudPreprocessor:
             raise ValueError("points empty")
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-        # _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
-        _, ind = pcd.remove_radius_outlier(nb_points=12, radius=0.01)
+        _, ind = pcd.remove_statistical_outlier(nb_neighbors=self.nb_points, std_ratio=self.sor_std)
+        # _, ind = pcd.remove_radius_outlier(nb_points=12, radius=0.01)
         return points[ind]
 
 
 
 
     def _sample_points(self, points):
-        """Apply farthest point sampling to reduce number of points."""
         if len(points) == 0:
             return np.zeros((self.target_num_points, 6), dtype=np.float32)
             
         if len(points) <= self.target_num_points:
-            # Pad with zeros if not enough points
             padded_points = np.zeros((self.target_num_points, 6), dtype=np.float32)
             padded_points[:len(points)] = points
             return padded_points
             
         try:
-            # Use farthest point sampling
             points_xyz = points[:, :3]
             sampled_xyz, sample_indices = self._farthest_point_sampling(
                 points_xyz, self.target_num_points)
                 
-            # Reconstruct full points with RGB
             if self.use_cuda:
                 sample_indices = sample_indices.cpu().numpy().flatten()
             else:
@@ -788,12 +704,10 @@ class PointCloudPreprocessor:
         except Exception as e:
             if self.verbose:
                 print(f"FPS failed: {e}, using random sampling")
-            # Fallback to random sampling
             indices = np.random.choice(len(points), self.target_num_points, replace=False)
             return points[indices]
             
     def _farthest_point_sampling(self, points, num_points):
-        """Apply farthest point sampling using pytorch3d."""
         if not PYTORCH3D_AVAILABLE:
             raise ImportError("pytorch3d not available")
             
@@ -802,14 +716,11 @@ class PointCloudPreprocessor:
         if self.use_cuda:
             points_tensor = points_tensor.cuda()
             
-        # pytorch3d expects batch dimension
         points_batch = points_tensor.unsqueeze(0)
         
-        # Apply FPS
         sampled_points, indices = torch3d_ops.sample_farthest_points(
             points=points_batch, K=num_points)
             
-        # Remove batch dimension
         sampled_points = sampled_points.squeeze(0)
         indices = indices.squeeze(0)
         
@@ -858,7 +769,6 @@ class LowDimPreprocessor:
 
 
 def create_default_preprocessor(target_num_points=1024, use_cuda=True, verbose=False):
-    """Create a preprocessor with default settings."""
     return PointCloudPreprocessor(
         target_num_points=target_num_points,
         use_cuda=use_cuda,
@@ -867,13 +777,7 @@ def create_default_preprocessor(target_num_points=1024, use_cuda=True, verbose=F
 
 
 def downsample_obs_data(obs_data, downsample_factor=3, offset=0):
-    """
-    Downsample observation data by taking every Nth sample with a phase offset.
-    Args:
-        obs_data: Dict[str, np.ndarray]
-        downsample_factor: int (e.g., 3 for 30→10Hz)
-        offset: int in [0, downsample_factor-1]
-    """
+
 
     downsampled_data = {}
     for key, value in obs_data.items():
@@ -883,34 +787,15 @@ def downsample_obs_data(obs_data, downsample_factor=3, offset=0):
         else:
             downsampled_data[key] = value
 
-        # if isinstance(value, np.ndarray) and len(value.shape) > 0:
-        #     downsampled_data[key] = value[::downsample_factor].copy()
-        # else:
-        #     downsampled_data[key] = value
     return downsampled_data
 
 
 def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestamps):
-    """
-    Align observation and action data based on timestamps.
-    For each obs timestamp, find the first action timestamp that comes after it.
-    
-    Args:
-        obs_data: Dictionary of observation arrays
-        action_data: Dictionary of action arrays  
-        obs_timestamps: Array of observation timestamps
-        action_timestamps: Array of action timestamps
-        
-    Returns:
-        aligned_obs_data: Dictionary of aligned observation data
-        aligned_action_data: Dictionary of aligned action data
-        valid_indices: Indices where alignment was successful
-    """
+
     valid_indices = []
     aligned_action_indices = []
     
     for i, obs_ts in enumerate(obs_timestamps):
-        # Find first action timestamp >= obs timestamp
         future_actions = action_timestamps >= obs_ts
         if np.any(future_actions):
             action_idx = np.where(future_actions)[0][0]
@@ -921,7 +806,6 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
         print("Warning: No valid obs-action alignments found!")
         return {}, {}, []
     
-    # Filter obs data to only valid indices
     aligned_obs_data = {}
     for key, value in obs_data.items():
         if isinstance(value, np.ndarray) and len(value.shape) > 0:
@@ -929,32 +813,18 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
         else:
             aligned_obs_data[key] = value
             
-    # Filter action data to aligned indices
     aligned_action_data = {}
     for key, value in action_data.items():
         if isinstance(value, np.ndarray) and len(value.shape) > 0:
             aligned_action_data[key] = value[aligned_action_indices]
         else:
             aligned_action_data[key] = value
-    # print(f"Aligned {len(valid_indices)} obs-action pairs from {len(obs_timestamps)} obs and {len(action_timestamps)} actions")
     return aligned_obs_data, aligned_action_data, valid_indices
 
 
 
 def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, 
                             downsample_factor=3, downsample_offset=0):
-    """
-    Process a single episode: load, downsample, align, and optionally preprocess.
-    
-    Args:
-        episode_path: Path to episode directory
-        pc_preprocessor: Optional PointCloudPreprocessor instance
-        lowdim_preprocessor: Optional LowDimPreprocessor instance
-        downsample_factor: Factor for downsampling obs data
-        
-    Returns:
-        episode_data: Dictionary containing processed episode data
-    """
 
     episode_path = pathlib.Path(episode_path)
     if pc_preprocessor is not None and hasattr(pc_preprocessor, "reset_temporal"):
@@ -977,12 +847,10 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     for key in action_replay_buffer.keys():
         action_data[key] = action_replay_buffer[key][:]
 
-    # Downsample obs data with phase offset
     downsampled_obs = downsample_obs_data(obs_data, downsample_factor=downsample_factor, offset=downsample_offset)
     downsampled_obs_timestamps = downsampled_obs['align_timestamp']
     action_timestamps = action_data['timestamp']
     
-    # Align obs and action data based on timestamps
     aligned_obs, aligned_action, valid_indices = align_obs_action_data(
         downsampled_obs, action_data, 
         downsampled_obs_timestamps, action_timestamps)
@@ -991,7 +859,6 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
     if len(valid_indices) == 0:
         return None
         
-    # Apply pointcloud preprocessing if provided
     if pc_preprocessor is not None and 'pointcloud' in aligned_obs:
         processed_pointclouds = []
         for pc in aligned_obs['pointcloud']:
@@ -1000,18 +867,15 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
         aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
     
     
-    # Create robot_obs by concatenating pose and gripper width
     robot_eef_pose = aligned_obs['robot_eef_pose']
-    robot_gripper_width = aligned_obs['robot_gripper'][:, :1] # Keep it as a column vector
+    robot_gripper_width = aligned_obs['robot_gripper'][:, :1] 
     aligned_obs['robot_obs'] = np.concatenate([robot_eef_pose, robot_gripper_width], axis=1) 
     
 
-    # TF to based on origin frames
     if lowdim_preprocessor is not None:
         aligned_obs['robot_obs'] = lowdim_preprocessor.TF_process(aligned_obs['robot_obs'])
         aligned_action['action'] = lowdim_preprocessor.TF_process(aligned_action['action'])
     
-    # Combine obs and action data
     episode_data = {}
     episode_data.update(aligned_obs)
     episode_data.update(aligned_action)
@@ -1020,24 +884,11 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
 
 
 def parse_shape_meta(shape_meta: dict) -> Tuple[List[str], List[str], dict, dict]:
-    """
-    Parse shape_meta to extract pointcloud keys, lowdim keys, and their configurations.
-    
-    Args:
-        shape_meta: Shape metadata dictionary from config
-        
-    Returns:
-        pointcloud_keys: List of pointcloud observation keys
-        lowdim_keys: List of lowdim observation keys  
-        pointcloud_configs: Configuration for each pointcloud key
-        lowdim_configs: Configuration for each lowdim key
-    """
     pointcloud_keys = []
     lowdim_keys = []
     pointcloud_configs = {}
     lowdim_configs = {}
     
-    # Parse obs shape meta
     obs_shape_meta = shape_meta.get('obs', {})
     for key, attr in obs_shape_meta.items():
         obs_type = attr.get('type', 'low_dim')
@@ -1060,25 +911,14 @@ def parse_shape_meta(shape_meta: dict) -> Tuple[List[str], List[str], dict, dict
 
 
 def validate_episode_data_with_shape_meta(episode_data: dict, shape_meta: dict) -> bool:
-    """
-    Validate that episode data matches the expected shape_meta.
-    
-    Args:
-        episode_data: Processed episode data
-        shape_meta: Expected shape metadata
-        
-    Returns:
-        bool: True if validation passes
-    """
+
     pointcloud_keys, lowdim_keys, pointcloud_configs, lowdim_configs = parse_shape_meta(shape_meta)
     
-    # Validate pointcloud data
     for key in pointcloud_keys:
         if key in episode_data:
             data = episode_data[key]
             expected_shape = pointcloud_configs[key]['shape']
             if len(data.shape) >= 2:
-                # Check that last dimensions match expected shape
                 if data.shape[-len(expected_shape):] != expected_shape:
                     print(f"Warning: {key} shape mismatch. Expected: {expected_shape}, Got: {data.shape}")
                     return False
@@ -1086,7 +926,6 @@ def validate_episode_data_with_shape_meta(episode_data: dict, shape_meta: dict) 
             print(f"Warning: Expected pointcloud key '{key}' not found in episode data")
             return False
     
-    # Validate lowdim data
     for key in lowdim_keys:
         if key in episode_data:
             data = episode_data[key]
@@ -1096,7 +935,6 @@ def validate_episode_data_with_shape_meta(episode_data: dict, shape_meta: dict) 
                     continue
 
             if len(data.shape) >= 1:
-                # Check that last dimensions match expected shape
                 if data.shape[-len(expected_shape):] != expected_shape:
                     print(f"Warning: {key} shape mismatch. Expected: {expected_shape}, Got: {data.shape}")
                     return False
@@ -1104,7 +942,6 @@ def validate_episode_data_with_shape_meta(episode_data: dict, shape_meta: dict) 
             print(f"Warning: Expected lowdim key '{key}' not found in episode data")
             return False
     
-    # Validate action data
     action_shape_meta = shape_meta.get('action', {})
     if 'action' in episode_data and 'shape' in action_shape_meta:
         expected_action_shape = tuple(action_shape_meta['shape'])
@@ -1127,30 +964,14 @@ def _get_replay_buffer(
         max_episodes: Optional[int] = None,
         n_workers: int = 1
 ) -> ReplayBuffer:
-    """
-    Convert Piper demonstration data to ReplayBuffer format.
-    
-    Args:
-        dataset_path: Path to recorder_data directory containing episode folders
-        shape_meta: Dictionary defining observation and action shapes/types
-        store: Zarr store for output (if None, uses MemoryStore)
-        pc_preprocessor: Optional pointcloud preprocessor
-        lowdim_preprocessor: Optional lowdim preprocessor
-        downsample_factor: Factor for downsampling obs data (30Hz -> 10Hz = 3)
-        max_episodes: Maximum number of episodes to process
-        n_workers: Number of worker processes (currently unused)
-        
-    Returns:
-        replay_buffer: ReplayBuffer containing processed data
-    """
+
     if store is None:
         store = zarr.MemoryStore()
         
     dataset_path = pathlib.Path(dataset_path)
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
-    
-    # Parse shape_meta to understand data structure
+    False
     pointcloud_keys, lowdim_keys, pointcloud_configs, lowdim_configs = parse_shape_meta(shape_meta)
     
     print(f"Parsed shape_meta:")
@@ -1158,7 +979,6 @@ def _get_replay_buffer(
     print(f"  - Lowdim keys: {lowdim_keys}")
     print(f"  - Action shape: {shape_meta.get('action', {}).get('shape', 'undefined')}")
     print(f"  - downsample_factor: {downsample_factor}")
-    # Find all episode directories
     episode_dirs = []
     for item in sorted(dataset_path.iterdir()):
         if item.is_dir() and item.name.startswith('episode_'):
@@ -1172,10 +992,8 @@ def _get_replay_buffer(
     if len(episode_dirs) == 0:
         raise ValueError("No episode directories found")
     
-    # Create ReplayBuffer
     replay_buffer = ReplayBuffer.create_empty_zarr(storage=store)
     
-    # Process episodes
     with tqdm(total=len(episode_dirs), desc="Processing episodes", mininterval=1.0) as pbar:
         offsets = list(range(downsample_factor)) if downsample_use_all_offsets else [0]
         for episode_dir in episode_dirs:
@@ -1190,9 +1008,7 @@ def _get_replay_buffer(
                     )
 
                     if episode_data is not None:
-                        # Validate episode data against shape_meta
                         if validate_episode_data_with_shape_meta(episode_data, shape_meta):
-                            # Ensure all data are numpy arrays before adding to buffer
                             L = len(episode_data['align_timestamp'])
                             episode_data['meta_source_episode'] = np.array([episode_dir.name]*L, dtype='S64')
                             episode_data['meta_downsample_offset'] = np.full((L,), off, dtype=np.int16)
@@ -1200,7 +1016,6 @@ def _get_replay_buffer(
                                 if isinstance(episode_data[key], list):
                                     episode_data[key] = np.asarray(episode_data[key])
 
-                            # Add episode to replay buffer
                             replay_buffer.add_episode(episode_data,
                                 object_codecs={'pointcloud': numcodecs.Pickle()})
                             pbar.set_postfix(

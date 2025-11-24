@@ -34,7 +34,7 @@ EPISODE_IDX = 50
 # 'N' 키를 눌렀을 때 건너뛸 스텝 수 (애니메이션 시 장면 전환 간격)
 STEP_SIZE = 8
 # 시각화 모드 ('sphere' 또는 'frame')
-VIS_MODE = 'sphere'
+VIS_MODE = 'frame'
 # 사용할 모델 타입 ('RISE' 또는 'SPEC_mono')
 MODEL_TYPE = 'RISE'
 # ============================================================

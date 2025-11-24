@@ -34,7 +34,7 @@ EPISODE_IDX = 163
 # 'N' 키를 눌렀을 때 건너뛸 스텝 수
 STEP_SIZE = 3
 # 시각화 모드 ('sphere' 또는 'frame')
-VIS_MODE = 'frame'
+VIS_MODE = 'sphere'
 # 사용할 모델 타입 ('RISE' 또는 'SPEC_mono')
 MODEL_TYPE = 'SPEC_mono'
 # ============================================================
