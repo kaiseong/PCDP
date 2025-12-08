@@ -72,7 +72,6 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         # This section was missing and is now added to actually load data.
         super().__init__() # Call parent __init__ but don't pass args
 
-        assert os.path.isdir(dataset_path), f"Dataset path does not exist: {dataset_path}"
         pc_preprocessor = None
         if enable_pc_preprocessing:
             pc_kwargs = OmegaConf.to_container(pc_preprocessor_config, resolve=True) if pc_preprocessor_config else {}
@@ -118,8 +117,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                         pc_preprocessor=pc_preprocessor,
                         lowdim_preprocessor=low_dim_preprocessor,
                         downsample_factor=downsample_factor,
-                        downsample_use_all_offsets=downsample_use_all_offsets,
-                        voxel_size_for_cache=voxel_size,  # <-- NEW
+                        downsample_use_all_offsets=downsample_use_all_offsets
                     )
                     print('Saving cache to disk.')
                     with zarr.ZipStore(cache_zarr_path) as zip_store:
@@ -138,8 +136,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                 pc_preprocessor=pc_preprocessor,
                 lowdim_preprocessor=low_dim_preprocessor,
                 downsample_factor=downsample_factor,
-                downsample_use_all_offsets=downsample_use_all_offsets,
-                voxel_size_for_cache=voxel_size,  # <-- NEW
+                downsample_use_all_offsets=downsample_use_all_offsets
             )
         
         # Parse shape meta to identify keys
@@ -168,6 +165,7 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
                 max_n=max_train_episodes, 
                 seed=seed)
         
+        episode_mask = train_mask if split =='train' else val_mask
 
         self.sampler = SequenceSampler(
             replay_buffer=replay_buffer, 
@@ -330,16 +328,14 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
 
         T_slice = slice(self.n_obs_steps)
         obs_dict = {key: data[key][T_slice] for key in self.pointcloud_keys + self.lowdim_keys}
+        
         clouds = [obs_dict['pointcloud'][i].astype(np.float32) for i in range(self.n_obs_steps)]
         
-        # NEW: use precomputed voxel coords from cache if available
-        coords_cached = None
-        if 'pointcloud_coords' in data:
-            coords_cached = data['pointcloud_coords'][T_slice]
-        
+        # Action is (T, 7) with (x,y,z, r,p,y, gripper)
         actions_euler = data['action'].astype(np.float32)
-        
 
+        # =========== 2. MODIFIED: Action Representation Conversion ===========
+        # Convert action from Euler angles to 6D representation for the policy
         pose_euler = actions_euler[:, :6]
         gripper_action = actions_euler[:, 6:]
         pose_9d = xyz_rot_transform(pose_euler, from_rep="euler_angles", to_rep="rotation_6d", from_convention="ZYX")
@@ -348,19 +344,14 @@ class RISE_RealStackPointCloudDataset(BasePointCloudDataset):
         # Voxelize for MinkowskiEngine
         input_coords_list = []
         input_feats_list = []
-        for t, cloud in enumerate(clouds):
-            if coords_cached is not None:
-                # cached: (Ni, 3) int32 from cache 생성 시점
-                coords = np.asarray(coords_cached[t], dtype=np.int32)
-            else:
-                # fallback: 기존 RISE baseline voxelization
-                coords = np.floor(cloud[:, :3] / self.voxel_size).astype(np.int32)
+        for cloud in clouds:
+            coords = np.floor(cloud[:, :3] / self.voxel_size).astype(np.int32)
             coords = np.ascontiguousarray(coords)
-
-            # Return unnormalized RGB in features (baseline 그대로)
+            
+            # Return unnormalized RGB in features
             input_feats_list.append(cloud.astype(np.float32))
             input_coords_list.append(coords)
-            
+
         return {
             'input_coords_list': input_coords_list,
             'input_feats_list': input_feats_list,

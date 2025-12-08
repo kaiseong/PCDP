@@ -827,7 +827,7 @@ def align_obs_action_data(obs_data, action_data, obs_timestamps, action_timestam
 
 
 def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocessor=None, 
-                            downsample_factor=3, downsample_offset=0, voxel_size_for_cache=None):
+                            downsample_factor=3, downsample_offset=0):
 
     episode_path = pathlib.Path(episode_path)
     if pc_preprocessor is not None and hasattr(pc_preprocessor, "reset_temporal"):
@@ -868,19 +868,7 @@ def process_single_episode(episode_path, pc_preprocessor=None, lowdim_preprocess
             processed_pc = pc_preprocessor.process(pc)
             processed_pointclouds.append(processed_pc)
         aligned_obs['pointcloud'] = np.array(processed_pointclouds, dtype=object)
-
-    # === NEW: precompute voxel coords for RISE cache (baseline voxelization) ===
-    if voxel_size_for_cache is not None and 'pointcloud' in aligned_obs:
-        pc_coords_list = []
-        for pc in aligned_obs['pointcloud']:
-            if pc is None or len(pc) == 0:
-                pc_coords = np.zeros((0, 3), dtype=np.int32)
-            else:
-                pc_coords = np.floor(pc[:, :3] / float(voxel_size_for_cache)).astype(np.int32)
-            pc_coords_list.append(pc_coords)
-        # object array: per-step variable-length (Ni, 3)
-        aligned_obs['pointcloud_coords'] = np.array(pc_coords_list, dtype=object)
-    # ==========================================================================
+    
     
     robot_eef_pose = aligned_obs['robot_eef_pose']
     robot_gripper_width = aligned_obs['robot_gripper'][:, :1] 
@@ -977,8 +965,7 @@ def _get_replay_buffer(
         downsample_factor: int = 3,
         downsample_use_all_offsets: bool = False,
         max_episodes: Optional[int] = None,
-        n_workers: int = 1,
-        voxel_size_for_cache: Optional[float] = None,
+        n_workers: int = 1
 ) -> ReplayBuffer:
 
     if store is None:
@@ -987,7 +974,7 @@ def _get_replay_buffer(
     dataset_path = pathlib.Path(dataset_path)
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
-    
+    False
     pointcloud_keys, lowdim_keys, pointcloud_configs, lowdim_configs = parse_shape_meta(shape_meta)
     
     print(f"Parsed shape_meta:")
@@ -1020,8 +1007,7 @@ def _get_replay_buffer(
                         pc_preprocessor, 
                         lowdim_preprocessor, 
                         downsample_factor,
-                        downsample_offset=off,
-                        voxel_size_for_cache=voxel_size_for_cache
+                        downsample_offset=off
                     )
 
                     if episode_data is not None:
@@ -1032,11 +1018,9 @@ def _get_replay_buffer(
                             for key in episode_data.keys():
                                 if isinstance(episode_data[key], list):
                                     episode_data[key] = np.asarray(episode_data[key])
-                            object_codecs = {'pointcloud': numcodecs.Pickle()}
-                            if 'pointcloud_coords' in episode_data:
-                                object_codecs['pointcloud_coords'] = numcodecs.Pickle()
+
                             replay_buffer.add_episode(episode_data,
-                                object_codecs=object_codecs)
+                                object_codecs={'pointcloud': numcodecs.Pickle()})
                             pbar.set_postfix(
                                 episodes=replay_buffer.n_episodes,
                                 steps=replay_buffer.n_steps

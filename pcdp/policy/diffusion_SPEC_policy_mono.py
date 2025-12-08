@@ -34,6 +34,7 @@ class SPECPolicyMono(BasePointCloudPolicy):
         super().__init__()
         num_obs = 1
         robot_obs_dim = 10
+        print(f"input_dim: {input_dim}")
 
         # single encoder
         self.encoder = Sparse3DEncoder(input_dim=input_dim, output_dim=obs_feature_dim)
